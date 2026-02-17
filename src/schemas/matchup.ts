@@ -1,0 +1,93 @@
+import { z } from "zod";
+import { SUPPORTED_COACH_LANES } from "../data/champions.js";
+
+export const coachMatchupRequestSchema = z
+  .object({
+    playerChampion: z.string().min(2).max(40),
+    enemyChampion: z.string().min(2).max(40),
+    playerChampionPartner: z.string().min(2).max(40).optional(),
+    enemyChampionPartner: z.string().min(2).max(40).optional(),
+    lane: z.enum(SUPPORTED_COACH_LANES).optional(),
+    patch: z
+      .string()
+      .regex(/^[0-9]{2}\.[0-9]{1,2}$/)
+      .optional(),
+    language: z.literal("en").optional()
+  })
+  .strict()
+  .refine((data) => data.playerChampion !== data.enemyChampion, {
+    message: "playerChampion and enemyChampion must be different.",
+    path: ["enemyChampion"]
+  })
+  .refine((data) => {
+    if (data.lane !== "bot") return true;
+    const hasAllyPartner = Boolean(data.playerChampionPartner && data.playerChampionPartner.trim());
+    const hasEnemyPartner = Boolean(data.enemyChampionPartner && data.enemyChampionPartner.trim());
+    return hasAllyPartner && hasEnemyPartner;
+  }, {
+    message: "Bot lane requires both allied and enemy partner champions.",
+    path: ["playerChampionPartner"]
+  })
+  .refine((data) => {
+    if (data.lane !== "bot") return true;
+    return (
+      data.playerChampion !== data.playerChampionPartner && data.enemyChampion !== data.enemyChampionPartner
+    );
+  }, {
+    message: "Bot lane primary and partner champions must be different per side.",
+    path: ["playerChampionPartner"]
+  });
+
+const allInWindowSchema = z.object({
+  timing: z.enum(["level_2", "level_3", "level_6", "first_item", "enemy_misstep"]),
+  signal: z.string().min(4).max(160),
+  action: z.string().min(4).max(220)
+});
+
+export const coachMatchupResponseSchema = z
+  .object({
+    matchup: z.object({
+      playerChampion: z.string(),
+      enemyChampion: z.string(),
+      playerChampionPartner: z.string().optional(),
+      enemyChampionPartner: z.string().optional(),
+      lane: z.enum(SUPPORTED_COACH_LANES),
+      patch: z.string()
+    }),
+    difficulty: z.enum(["easy", "even", "hard"]),
+    earlyGamePlan: z.string().min(20).max(600),
+    level1to3Rules: z.array(z.string().min(8).max(160)).min(3).max(5),
+    allInWindows: z.array(allInWindowSchema).min(2).max(5),
+    runeAdjustments: z.object({
+      keystone: z.object({
+        recommended: z.string().max(40),
+        reason: z.string().max(180)
+      }),
+      secondary: z.object({
+        tree: z.string().max(40),
+        reason: z.string().max(180)
+      }),
+      shardsNote: z.string().max(140)
+    }),
+    commonMistakes: z.tuple([
+      z.string().min(10).max(180),
+      z.string().min(10).max(180),
+      z.string().min(10).max(180)
+    ]),
+    meta: z.object({
+      generatedAt: z.iso.datetime(),
+      dataConfidence: z.enum(["low", "medium", "high"]),
+      sampleSize: z.number().int().nonnegative(),
+      source: z.object({
+        stats: z.boolean(),
+        tags: z.boolean(),
+        rag: z.boolean(),
+        cacheHit: z.boolean()
+      }),
+      warnings: z.array(z.string().max(120)).default([])
+    })
+  })
+  .strict();
+
+export type CoachMatchupRequestInput = z.infer<typeof coachMatchupRequestSchema>;
+export type CoachMatchupResponseOutput = z.infer<typeof coachMatchupResponseSchema>;
