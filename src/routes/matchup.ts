@@ -52,6 +52,11 @@ function combineBotStats(primary: MatchupStats | null, partner: MatchupStats | n
   };
 }
 
+function clampWarning(message: string): string {
+  const trimmed = message.trim();
+  return trimmed.length <= 120 ? trimmed : `${trimmed.slice(0, 117).trim()}...`;
+}
+
 interface CreateMatchupRouterOptions {
   currentPatch: string;
   enableLiveStats: boolean;
@@ -325,16 +330,18 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         }
       );
       if (liveStatsWarning) {
-        coaching.meta.warnings = [liveStatsWarning, ...coaching.meta.warnings];
+        coaching.meta.warnings = [clampWarning(liveStatsWarning), ...coaching.meta.warnings];
       }
       if (usedExternalProvider) {
         coaching.meta.warnings = [
-          `Using fast provisional stats from ${usedExternalProvider} while Riot sample backfill continues.`,
+          clampWarning(`Using fast provisional stats from ${usedExternalProvider} while Riot sample backfill continues.`),
           ...coaching.meta.warnings
         ];
       } else if (externalSourceMeta && externalSourceMeta.status !== "success" && externalSourceMeta.status !== "cache_hit") {
         coaching.meta.warnings = [
-          `External source unavailable (${externalSourceMeta.status})${externalSourceMeta.failureReason ? `: ${externalSourceMeta.failureReason}` : ""}`,
+          clampWarning(
+            `External source unavailable (${externalSourceMeta.status})${externalSourceMeta.failureReason ? `: ${externalSourceMeta.failureReason}` : ""}`
+          ),
           ...coaching.meta.warnings
         ];
       }
@@ -358,15 +365,18 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             : { queued: false };
         if (queuedPrimary.queued || queuedPartner.queued || !hasEnoughSample) {
           coaching.meta.warnings = [
-            !hasEnoughSample
-              ? `Collecting more games (${currentSampleSize}/${requiredSampleGames}); provisional data may be shown.`
-              : lane === "bot"
-                ? "Queued background backfill for ADC/support matchup pairs."
-                : "Queued background backfill for this matchup pair.",
+            clampWarning(
+              !hasEnoughSample
+                ? `Collecting more games (${currentSampleSize}/${requiredSampleGames}); provisional data may be shown.`
+                : lane === "bot"
+                  ? "Queued background backfill for ADC/support matchup pairs."
+                  : "Queued background backfill for this matchup pair."
+            ),
             ...coaching.meta.warnings
           ];
         }
       }
+      coaching.meta.warnings = coaching.meta.warnings.map(clampWarning);
       const parseOutput = coachMatchupResponseSchema.safeParse(coaching);
 
       if (!parseOutput.success) {
