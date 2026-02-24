@@ -54,7 +54,7 @@ export const coachMatchupResponseSchema = z
       lane: z.enum(SUPPORTED_COACH_LANES),
       patch: z.string()
     }),
-    difficulty: z.enum(["easy", "even", "hard"]),
+    difficulty: z.enum(["easy", "favored", "even", "not_favored", "hard"]),
     earlyGamePlan: z.string().min(20).max(600),
     level1to3Rules: z.array(z.string().min(8).max(160)).min(3).max(5),
     allInWindows: z.array(allInWindowSchema).min(2).max(5),
@@ -78,6 +78,13 @@ export const coachMatchupResponseSchema = z
       generatedAt: z.iso.datetime(),
       dataConfidence: z.enum(["low", "medium", "high"]),
       sampleSize: z.number().int().nonnegative(),
+      winRate: z.number().min(0).max(1).nullable(),
+      sampleTarget: z.number().int().positive(),
+      providerSamples: z.object({
+        riotGames: z.number().int().nonnegative(),
+        externalGames: z.number().int().nonnegative(),
+        effectiveGames: z.number().int().nonnegative()
+      }),
       source: z.object({
         stats: z.boolean(),
         tags: z.boolean(),

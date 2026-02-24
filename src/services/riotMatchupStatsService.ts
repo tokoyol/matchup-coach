@@ -7,7 +7,7 @@ import {
 import type { MatchupStats } from "../types/stats.js";
 import { toRiotPatchPrefix } from "../utils/patch.js";
 import { RiotApiClient } from "./riotApiClient.js";
-import { MatchupStatsRepository } from "./matchupStatsRepository.js";
+import type { MatchupStatsStore } from "./matchupStatsStore.js";
 
 interface GetStatsInput {
   playerChampion: string;
@@ -16,6 +16,8 @@ interface GetStatsInput {
   patch: string;
   maxTrackedPlayers?: number;
   maxMatchesPerPlayer?: number;
+  maxUniqueMatchIds?: number;
+  targetGames?: number;
 }
 
 interface CacheEntry {
@@ -33,7 +35,7 @@ export class RiotMatchupStatsService {
 
   constructor(
     private readonly riotClient: RiotApiClient,
-    private readonly options?: { cacheTtlMs?: number; repository?: MatchupStatsRepository }
+    private readonly options?: { cacheTtlMs?: number; repository?: MatchupStatsStore }
   ) {
     this.cacheTtlMs = options?.cacheTtlMs ?? 10 * 60 * 1000;
   }
@@ -41,10 +43,11 @@ export class RiotMatchupStatsService {
   async getMatchupStats(input: GetStatsInput): Promise<MatchupStats | null> {
     const riotPatchPrefix = toRiotPatchPrefix(input.patch);
     const lane = input.lane ?? "top";
+    const desiredGames = Math.max(0, Math.floor(input.targetGames ?? 0));
     const cacheKey = `${input.patch}:${lane}:${input.playerChampion}:${input.enemyChampion}`;
     const now = Date.now();
     const cached = this.cache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
+    if (cached && cached.expiresAt > now && (desiredGames === 0 || cached.value.games >= desiredGames)) {
       return cached.value;
     }
 
@@ -56,7 +59,7 @@ export class RiotMatchupStatsService {
         input.enemyChampion,
         now
       );
-      if (persisted) {
+      if (persisted && (desiredGames === 0 || persisted.games >= desiredGames)) {
         this.cache.set(cacheKey, { value: persisted, expiresAt: now + this.cacheTtlMs });
         return persisted;
       }
@@ -97,7 +100,11 @@ export class RiotMatchupStatsService {
         })
       )
     );
-    const matchIds = [...new Set(matchIdsByPlayer.flat())].slice(0, 150);
+    const maxUniqueMatchIds = Math.max(
+      input.maxUniqueMatchIds ?? 150,
+      desiredGames > 0 ? desiredGames * 20 : 150
+    );
+    const matchIds = [...new Set(matchIdsByPlayer.flat())].slice(0, maxUniqueMatchIds);
 
     let games = 0;
     let wins = 0;
@@ -178,6 +185,10 @@ export class RiotMatchupStatsService {
           if (event.killerId === playerId) pre6Kills += 1;
           if (event.victimId === playerId) pre6Deaths += 1;
         }
+      }
+
+      if (desiredGames > 0 && games >= desiredGames) {
+        break;
       }
     }
 

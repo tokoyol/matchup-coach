@@ -160,6 +160,59 @@ h2 {
   font-size: 1.05rem;
 }
 
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.help-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid #3f5c78;
+  color: #b9c8d8;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: help;
+}
+
+.status-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  margin: 0 0 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.status-pill.ok {
+  background: #11311f;
+  color: #74e49c;
+  border: 1px solid #2f6f47;
+}
+
+.status-pill.warn {
+  background: #382b13;
+  color: #ffd27a;
+  border: 1px solid #7b5b22;
+}
+
+.status-pill.error {
+  background: #3a1717;
+  color: #ff9f9f;
+  border: 1px solid #8a3d3d;
+}
+
+.status-pill.neutral {
+  background: #1d2733;
+  color: #b8c7d8;
+  border: 1px solid #42566b;
+}
+
 ul {
   margin: 0;
   padding-left: 1.1rem;
@@ -179,6 +232,14 @@ ul {
 
 .difficulty.even {
   color: #f5cf67;
+}
+
+.difficulty.favored {
+  color: #95e875;
+}
+
+.difficulty.not_favored {
+  color: #ffb46a;
 }
 
 .difficulty.hard {

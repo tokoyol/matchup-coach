@@ -48,18 +48,42 @@ function estimateDifficulty(
   playerChampion: string,
   enemyChampion: string,
   stats?: MatchupStats | null
-): "easy" | "even" | "hard" {
-  if (stats && stats.games >= 8) {
-    let score = 0;
-    if (stats.goldDiff15 >= 250) score += 1;
-    if (stats.winRate >= 0.54) score += 1;
-    if (stats.pre6KillRate > stats.earlyDeathRate) score += 1;
-    if (stats.goldDiff15 <= -250) score -= 1;
-    if (stats.winRate <= 0.46) score -= 1;
-    if (stats.pre6KillRate < stats.earlyDeathRate) score -= 1;
-    if (score >= 2) return "easy";
-    if (score <= -2) return "hard";
+): "easy" | "favored" | "even" | "not_favored" | "hard" {
+  const mapScoreToDifficulty = (
+    score: number
+  ): "easy" | "favored" | "even" | "not_favored" | "hard" => {
+    if (score >= 3) return "easy";
+    if (score >= 1) return "favored";
+    if (score <= -3) return "hard";
+    if (score <= -1) return "not_favored";
     return "even";
+  };
+
+  const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
+  const likelyMissingLaneMetrics = (input: MatchupStats): boolean => {
+    // External scraped sources can provide strong sample+winrate but miss lane-specific metrics.
+    // If those metrics are missing, rely on winrate thresholds directly.
+    return (
+      input.games >= 200 &&
+      input.goldDiff15 === 0 &&
+      input.pre6KillRate === 0 &&
+      input.earlyDeathRate === 0
+    );
+  };
+
+  if (stats && stats.games >= 8) {
+    if (likelyMissingLaneMetrics(stats)) {
+      if (stats.winRate >= 0.54) return "easy";
+      if (stats.winRate >= 0.515) return "favored";
+      if (stats.winRate <= 0.445) return "hard";
+      if (stats.winRate <= 0.485) return "not_favored";
+      return "even";
+    }
+    const goldComponent = clamp(stats.goldDiff15 / 250, -2, 2);
+    const winRateComponent = clamp((stats.winRate - 0.5) / 0.04, -2, 2);
+    const pre6SkirmishComponent = clamp((stats.pre6KillRate - stats.earlyDeathRate) / 0.08, -2, 2);
+    const score = goldComponent + winRateComponent + pre6SkirmishComponent;
+    return mapScoreToDifficulty(score);
   }
 
   const playerTags = CHAMPION_TAGS[playerChampion] ?? [];
@@ -73,9 +97,97 @@ function estimateDifficulty(
   if (playerTags.includes("weak_early")) score -= 1;
   if (enemyTags.includes("weak_early")) score += 1;
 
-  if (score >= 2) return "easy";
-  if (score <= -2) return "hard";
-  return "even";
+  return mapScoreToDifficulty(score);
+}
+
+function applyMatchupPriors(
+  input: CoachMatchupRequestInput,
+  advice: Pick<
+    CoachMatchupResponseOutput,
+    "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
+  >
+): Pick<
+  CoachMatchupResponseOutput,
+  "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
+> {
+  if (input.lane === "top" && input.playerChampion === "Aatrox" && input.enemyChampion === "Darius") {
+    const rules = [
+      "Level 1: Start Q and keep spacing so Darius cannot freely stack passive.",
+      "Level 2: Take E for repositioning, dodge angle, and safer Q spacing.",
+      "Level 3: Take W to threaten pull-back trades after landing Q sweet spots."
+    ];
+    return {
+      ...advice,
+      level1to3Rules: rules
+    };
+  }
+  if (input.lane === "top" && input.playerChampion === "Aatrox" && input.enemyChampion === "Vayne") {
+    const rules = [
+      "Level 1: Start Q and last-hit patiently; do not overextend into free ranged autos.",
+      "Level 2: Take E for spacing and repositioning control.",
+      "Level 3: Take W to punish oversteps and chain short trades after Q hits; avoid fighting near walls."
+    ];
+    const windows = [
+      {
+        timing: "level_3" as const,
+        signal: "Vayne uses Q aggressively into your wave and is outside immediate wall stun angle.",
+        action: "Land Q1 or Q2 first, then cast W and use E to keep distance while finishing the short trade."
+      },
+      {
+        timing: "enemy_misstep" as const,
+        signal: "Vayne wastes E or walks too close to wall-adjacent terrain.",
+        action: "Commit a heavier trade with Q chain and hold E to avoid getting pinned into Condemn."
+      }
+    ];
+    return {
+      ...advice,
+      level1to3Rules: rules,
+      allInWindows: windows
+    };
+  }
+  return advice;
+}
+
+function sanitizeMechanicsLine(line: string): string {
+  let next = line.trim();
+  if (!next) return next;
+
+  // Generic impossible instruction cleanup.
+  next = next.replace(
+    /dodge\s+(?:a|an|the)?\s*point[\s-]?and[\s-]?click(?:\s+ability)?/gi,
+    "play around point-and-click"
+  );
+
+  // Common false instruction in lane advice.
+  next = next.replace(
+    /dodge\s+(?:her|his|their)?\s*condemn/gi,
+    "respect Condemn range and avoid wall angles"
+  );
+
+  next = next.replace(/\s{2,}/g, " ").trim();
+  return next;
+}
+
+function sanitizeAdviceMechanics(
+  advice: Pick<
+    CoachMatchupResponseOutput,
+    "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
+  >
+): Pick<
+  CoachMatchupResponseOutput,
+  "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
+> {
+  return {
+    ...advice,
+    earlyGamePlan: sanitizeMechanicsLine(advice.earlyGamePlan),
+    level1to3Rules: advice.level1to3Rules.map((line) => sanitizeMechanicsLine(line)),
+    allInWindows: advice.allInWindows.map((window) => ({
+      ...window,
+      signal: sanitizeMechanicsLine(window.signal),
+      action: sanitizeMechanicsLine(window.action)
+    })),
+    commonMistakes: advice.commonMistakes.map((line) => sanitizeMechanicsLine(line)) as [string, string, string]
+  };
 }
 
 export async function generateMatchupCoaching(
@@ -83,7 +195,15 @@ export async function generateMatchupCoaching(
   currentPatch: string,
   stats?: MatchupStats | null,
   partnerStats?: MatchupStats | null,
-  geminiCoachService?: GeminiCoachService
+  geminiCoachService?: GeminiCoachService,
+  options?: {
+    sampleTarget?: number;
+    providerSamples?: {
+      riotGames: number;
+      externalGames: number;
+      effectiveGames: number;
+    };
+  }
 ): Promise<CoachMatchupResponseOutput> {
   const patch = input.patch ?? currentPatch;
   const lane = input.lane ?? "top";
@@ -154,6 +274,9 @@ export async function generateMatchupCoaching(
     }
   }
 
+  advice = applyMatchupPriors(input, advice);
+  advice = sanitizeAdviceMechanics(advice);
+
   const response: CoachMatchupResponseOutput = {
     matchup: {
       playerChampion: input.playerChampion,
@@ -174,6 +297,16 @@ export async function generateMatchupCoaching(
       dataConfidence:
         hasStats && ((stats?.games ?? 0) + (partnerStats?.games ?? 0)) >= 24 ? "high" : hasStats ? "medium" : "low",
       sampleSize: (stats?.games ?? 0) + (partnerStats?.games ?? 0),
+      winRate: stats ? Number(stats.winRate.toFixed(3)) : null,
+      sampleTarget: Math.max(1, Math.floor(options?.sampleTarget ?? 10)),
+      providerSamples: {
+        riotGames: Math.max(0, Math.floor(options?.providerSamples?.riotGames ?? 0)),
+        externalGames: Math.max(0, Math.floor(options?.providerSamples?.externalGames ?? 0)),
+        effectiveGames: Math.max(
+          0,
+          Math.floor(options?.providerSamples?.effectiveGames ?? (stats?.games ?? 0) + (partnerStats?.games ?? 0))
+        )
+      },
       source: {
         stats: hasStats,
         tags: true,

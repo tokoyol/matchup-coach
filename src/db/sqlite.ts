@@ -21,6 +21,13 @@ export async function getDatabase(filename: string): Promise<Database> {
     driver: sqlite3.Database
   });
 
+  // Improve concurrent read/write behavior during long scrape imports.
+  await dbInstance.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA busy_timeout = 5000;
+  `);
+
   await dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS matchup_stats_cache (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

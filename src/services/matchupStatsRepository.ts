@@ -1,6 +1,7 @@
 import type { Database } from "sqlite";
 import type { SupportedLane } from "../data/champions.js";
 import type { MatchupStats } from "../types/stats.js";
+import type { MatchupStatsStore, MatchupStatsUpsertRow } from "./matchupStatsStore.js";
 
 interface MatchupCacheRow {
   stats_json: string;
@@ -22,16 +23,7 @@ interface CachedPairRow {
   expires_at: number;
 }
 
-interface UpsertRow {
-  patch: string;
-  lane: SupportedLane;
-  playerChampion: string;
-  enemyChampion: string;
-  stats: MatchupStats;
-  expiresAtMs: number;
-}
-
-export class MatchupStatsRepository {
+export class MatchupStatsRepository implements MatchupStatsStore {
   constructor(private readonly db: Database) {}
 
   async get(
@@ -83,24 +75,28 @@ export class MatchupStatsRepository {
     );
   }
 
-  async upsertMany(rows: UpsertRow[]): Promise<void> {
+  async upsertMany(rows: MatchupStatsUpsertRow[]): Promise<void> {
     if (rows.length === 0) return;
-    await this.db.exec("BEGIN TRANSACTION");
-    try {
-      for (const row of rows) {
-        await this.upsert(
-          row.patch,
-          row.lane,
-          row.playerChampion,
-          row.enemyChampion,
-          row.stats,
-          row.expiresAtMs
-        );
+    const chunkSize = 200;
+    for (let i = 0; i < rows.length; i += chunkSize) {
+      const chunk = rows.slice(i, i + chunkSize);
+      await this.db.exec("BEGIN TRANSACTION");
+      try {
+        for (const row of chunk) {
+          await this.upsert(
+            row.patch,
+            row.lane,
+            row.playerChampion,
+            row.enemyChampion,
+            row.stats,
+            row.expiresAtMs
+          );
+        }
+        await this.db.exec("COMMIT");
+      } catch (error) {
+        await this.db.exec("ROLLBACK");
+        throw error;
       }
-      await this.db.exec("COMMIT");
-    } catch (error) {
-      await this.db.exec("ROLLBACK");
-      throw error;
     }
   }
 

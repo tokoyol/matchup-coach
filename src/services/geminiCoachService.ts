@@ -322,7 +322,7 @@ export class GeminiCoachService {
     enemyChampionPartner?: string;
     lane: CoachLane;
     patch: string;
-    difficulty: "easy" | "even" | "hard";
+    difficulty: "easy" | "favored" | "even" | "not_favored" | "hard";
     playerTags: string[];
     enemyTags: string[];
     stats?: MatchupStats | null;

@@ -2,14 +2,18 @@ import cors from "cors";
 import express from "express";
 import { createMatchupRouter } from "./routes/matchup.js";
 import { env } from "./config/env.js";
+import { getPostgresPool } from "./db/postgres.js";
 import { getDatabase } from "./db/sqlite.js";
+import { LolalyticsScrapeProvider, type ExternalMatchupStatsProvider } from "./services/externalMatchupStatsProvider.js";
 import { GeminiCoachService } from "./services/geminiCoachService.js";
 import { MatchupStatsRepository } from "./services/matchupStatsRepository.js";
 import { MissingPairBackfillService } from "./services/missingPairBackfillService.js";
+import { PostgresMatchupStatsRepository } from "./services/postgresMatchupStatsRepository.js";
 import { startNightlyPrecompute } from "./services/nightlyPrecomputeScheduler.js";
 import { RiotApiClient } from "./services/riotApiClient.js";
 import { RiotMatchupStatsService } from "./services/riotMatchupStatsService.js";
 import { RiotPrecomputeService } from "./services/riotPrecomputeService.js";
+import type { MatchupStatsStore } from "./services/matchupStatsStore.js";
 
 async function bootstrap(): Promise<void> {
   const app = express();
@@ -21,9 +25,11 @@ async function bootstrap(): Promise<void> {
   app.use(express.json());
 
   let riotStatsService: RiotMatchupStatsService | undefined;
+  let riotApiClient: RiotApiClient | undefined;
   let riotPrecomputeService: RiotPrecomputeService | undefined;
   let missingPairBackfillService: MissingPairBackfillService | undefined;
-  let statsRepository: MatchupStatsRepository | undefined;
+  let externalStatsProvider: ExternalMatchupStatsProvider | undefined;
+  let statsRepository: MatchupStatsStore | undefined;
   const geminiCoachService = env.GEMINI_API_KEY
     ? new GeminiCoachService({
         apiKey: env.GEMINI_API_KEY,
@@ -31,8 +37,18 @@ async function bootstrap(): Promise<void> {
       })
     : undefined;
   if (env.RIOT_API_KEY && env.RIOT_ENABLE_LIVE_STATS) {
-    const db = await getDatabase(env.STATS_DB_PATH);
-    statsRepository = new MatchupStatsRepository(db);
+    if (env.DB_PROVIDER === "postgres") {
+      if (!env.DATABASE_URL) {
+        throw new Error("DATABASE_URL is required when DB_PROVIDER=postgres.");
+      }
+      const pgPool = await getPostgresPool(env.DATABASE_URL);
+      statsRepository = new PostgresMatchupStatsRepository(pgPool);
+      console.log("[db] Using postgres provider for matchup cache.");
+    } else {
+      const db = await getDatabase(env.STATS_DB_PATH);
+      statsRepository = new MatchupStatsRepository(db);
+      console.log(`[db] Using sqlite provider at ${env.STATS_DB_PATH}.`);
+    }
 
     const riotClient = new RiotApiClient({
       apiKey: env.RIOT_API_KEY,
@@ -43,6 +59,7 @@ async function bootstrap(): Promise<void> {
       retryBaseMs: env.RIOT_RETRY_BASE_MS,
       rateLimitCooldownMs: env.RIOT_RATE_LIMIT_COOLDOWN_SECONDS * 1000
     });
+    riotApiClient = riotClient;
 
     riotStatsService = new RiotMatchupStatsService(riotClient, {
       cacheTtlMs: env.STATS_CACHE_TTL_MINUTES * 60 * 1000,
@@ -53,7 +70,8 @@ async function bootstrap(): Promise<void> {
       maxQueueSize: env.BACKFILL_MAX_QUEUE_SIZE,
       cooldownMs: env.BACKFILL_COOLDOWN_MINUTES * 60 * 1000,
       maxTrackedPlayers: env.BACKFILL_MAX_TRACKED_PLAYERS,
-      maxMatchesPerPlayer: env.BACKFILL_MATCHES_PER_PLAYER
+      maxMatchesPerPlayer: env.BACKFILL_MATCHES_PER_PLAYER,
+      maxUniqueMatchIds: env.BACKFILL_MAX_UNIQUE_MATCHES
     });
     riotPrecomputeService = new RiotPrecomputeService(
       riotClient,
@@ -75,6 +93,10 @@ async function bootstrap(): Promise<void> {
       );
     }
   }
+  if (env.EXTERNAL_STATS_PROVIDER === "lolalytics") {
+    externalStatsProvider = new LolalyticsScrapeProvider(env.EXTERNAL_STATS_TIMEOUT_MS);
+    console.log("[stats] External matchup provider enabled: lolalytics.");
+  }
 
   app.get("/health", (_req, res) => {
     res.json({
@@ -90,11 +112,15 @@ async function bootstrap(): Promise<void> {
     createMatchupRouter({
       currentPatch: env.CURRENT_PATCH,
       enableLiveStats: Boolean(riotStatsService),
+      minSampleGames: env.MATCHUP_MIN_SAMPLE_GAMES,
       statsRepository,
       riotStatsService,
+      riotApiClient,
       riotPrecomputeService,
       missingPairBackfillService,
-      geminiCoachService
+      externalStatsProvider,
+      geminiCoachService,
+      adminApiToken: env.ADMIN_API_TOKEN
     })
   );
 

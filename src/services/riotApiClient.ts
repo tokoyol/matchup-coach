@@ -10,6 +10,15 @@ interface RiotClientConfig {
   rateLimitCooldownMs?: number;
 }
 
+export interface RiotApiKeyStatus {
+  configured: boolean;
+  valid: boolean;
+  expired: boolean;
+  httpStatus?: number;
+  message: string;
+  checkedAt: string;
+}
+
 export class RiotApiClient {
   private queue: Promise<void> = Promise.resolve();
   private lastRequestAtMs = 0;
@@ -163,5 +172,58 @@ export class RiotApiClient {
 
   async getMatchTimeline(matchId: string): Promise<JsonObject> {
     return this.request<JsonObject>("regional", `/lol/match/v5/matches/${matchId}/timeline`);
+  }
+
+  async getApiKeyStatus(): Promise<RiotApiKeyStatus> {
+    if (!this.config.apiKey) {
+      return {
+        configured: false,
+        valid: false,
+        expired: false,
+        message: "RIOT_API_KEY is not configured.",
+        checkedAt: new Date().toISOString()
+      };
+    }
+
+    const url = `https://${this.config.platformRoute}.api.riotgames.com/lol/status/v4/platform-data`;
+    try {
+      const response = await this.enqueue(() =>
+        fetch(url, {
+          method: "GET",
+          headers: {
+            "X-Riot-Token": this.config.apiKey
+          }
+        })
+      );
+      if (response.ok) {
+        return {
+          configured: true,
+          valid: true,
+          expired: false,
+          httpStatus: response.status,
+          message: "Riot API key is valid.",
+          checkedAt: new Date().toISOString()
+        };
+      }
+
+      const text = await response.text();
+      const expired = response.status === 401 || response.status === 403;
+      return {
+        configured: true,
+        valid: false,
+        expired,
+        httpStatus: response.status,
+        message: `Riot API key check failed: HTTP ${response.status}. ${text.slice(0, 220)}`,
+        checkedAt: new Date().toISOString()
+      };
+    } catch (error) {
+      return {
+        configured: true,
+        valid: false,
+        expired: false,
+        message: error instanceof Error ? error.message : "Unknown network error while checking Riot key.",
+        checkedAt: new Date().toISOString()
+      };
+    }
   }
 }

@@ -17,8 +17,12 @@ const envSchema = z.object({
   RIOT_RETRY_BASE_MS: z.coerce.number().int().positive().default(800),
   RIOT_RATE_LIMIT_COOLDOWN_SECONDS: z.coerce.number().int().positive().default(45),
   RIOT_ENABLE_LIVE_STATS: z.enum(["true", "false"]).optional().default("false").transform((v) => v === "true"),
+  EXTERNAL_STATS_PROVIDER: z.enum(["none", "lolalytics"]).default("none"),
+  EXTERNAL_STATS_TIMEOUT_MS: z.coerce.number().int().positive().default(3500),
   GEMINI_API_KEY: z.string().min(10).optional(),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
+  DB_PROVIDER: z.enum(["sqlite", "postgres"]).default("sqlite"),
+  DATABASE_URL: z.string().url().optional(),
   STATS_DB_PATH: z.string().min(1).default("./data/matchup-coach.db"),
   STATS_CACHE_TTL_MINUTES: z.coerce.number().int().positive().default(60),
   PRECOMPUTE_NIGHTLY_ENABLED: z
@@ -35,7 +39,10 @@ const envSchema = z.object({
   BACKFILL_MAX_QUEUE_SIZE: z.coerce.number().int().positive().default(100),
   BACKFILL_COOLDOWN_MINUTES: z.coerce.number().int().positive().default(20),
   BACKFILL_MAX_TRACKED_PLAYERS: z.coerce.number().int().positive().default(18),
-  BACKFILL_MATCHES_PER_PLAYER: z.coerce.number().int().positive().default(6)
+  BACKFILL_MATCHES_PER_PLAYER: z.coerce.number().int().positive().default(6),
+  BACKFILL_MAX_UNIQUE_MATCHES: z.coerce.number().int().positive().default(700),
+  MATCHUP_MIN_SAMPLE_GAMES: z.coerce.number().int().positive().default(10),
+  ADMIN_API_TOKEN: z.string().min(12).optional()
 });
 
 const parsed = envSchema.safeParse(process.env);

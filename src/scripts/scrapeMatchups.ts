@@ -8,8 +8,11 @@ import {
   normalizeLane,
   type SupportedLane
 } from "../data/champions.js";
+import { getPostgresPool } from "../db/postgres.js";
 import { getDatabase } from "../db/sqlite.js";
 import { MatchupStatsRepository } from "../services/matchupStatsRepository.js";
+import { PostgresMatchupStatsRepository } from "../services/postgresMatchupStatsRepository.js";
+import type { MatchupStatsStore } from "../services/matchupStatsStore.js";
 import { toRiotPatchPrefix } from "../utils/patch.js";
 
 interface CliOptions {
@@ -65,6 +68,14 @@ interface ScrapeCheckpoint {
   nextMatchIndex: number;
   matchesProcessed: number;
   buckets: Record<string, SerializedAggregationBucket>;
+}
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours}h ${minutes}m ${seconds}s`;
 }
 
 class DualWindowRateLimiter {
@@ -241,6 +252,7 @@ async function clearCheckpoint(checkpointPath: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const startedAt = Date.now();
   if (!env.RIOT_API_KEY) throw new Error("RIOT_API_KEY is required in .env for scrape script.");
 
   const options = parseArgs();
@@ -490,8 +502,17 @@ async function main(): Promise<void> {
     }
   }
 
-  const db = await getDatabase(env.STATS_DB_PATH);
-  const repository = new MatchupStatsRepository(db);
+  let repository: MatchupStatsStore;
+  if (env.DB_PROVIDER === "postgres") {
+    if (!env.DATABASE_URL) {
+      throw new Error("DATABASE_URL is required when DB_PROVIDER=postgres.");
+    }
+    const pool = await getPostgresPool(env.DATABASE_URL);
+    repository = new PostgresMatchupStatsRepository(pool);
+  } else {
+    const db = await getDatabase(env.STATS_DB_PATH);
+    repository = new MatchupStatsRepository(db);
+  }
   const expiresAt = Date.now() + env.STATS_CACHE_TTL_MINUTES * 60 * 1000;
   const rows = [...buckets.entries()].map(([key, bucket]) => {
     const [, lane, playerChampion, enemyChampion] = key.split(":");
@@ -524,12 +545,38 @@ async function main(): Promise<void> {
 
   await repository.upsertMany(rows);
   await clearCheckpoint(options.checkpointPath);
-  console.log(
-    `[scrape] done. lanes=${options.lanes.join(",")} players=${puuids.length}, uniqueMatches=${uniqueMatchIds.length}, acceptedMatches=${matchesProcessed}, pairsWritten=${rows.length}`
+
+  const byLaneWritten = options.lanes.reduce<Record<string, number>>((acc, lane) => {
+    acc[lane] = rows.filter((row) => row.lane === lane).length;
+    return acc;
+  }, {});
+
+  const byLaneCached = await Promise.all(
+    options.lanes.map(async (lane) => {
+      const overview = await repository.getCacheOverview(options.patch, lane);
+      return {
+        lane,
+        cachedPairs: overview.totalCount,
+        freshPairs: overview.freshCount,
+        latestComputedAt: overview.latestComputedAt
+      };
+    })
   );
+
+  const elapsedMs = Date.now() - startedAt;
+  console.log("");
+  console.log("[scrape] SUCCESS");
+  console.log(`[scrape] duration=${formatDuration(elapsedMs)} patch=${options.patch}`);
+  console.log(
+    `[scrape] lanes=${options.lanes.join(",")} players=${puuids.length} uniqueMatches=${uniqueMatchIds.length} acceptedMatches=${matchesProcessed} pairsWritten=${rows.length}`
+  );
+  console.log(`[scrape] pairsWrittenByLane=${JSON.stringify(byLaneWritten)}`);
+  console.log(`[scrape] cacheOverviewByLane=${JSON.stringify(byLaneCached)}`);
+  console.log("[scrape] import complete.");
 }
 
 main().catch((error) => {
+  console.error("[scrape] FAILED");
   console.error("[scrape] failed:", error);
   process.exit(1);
 });

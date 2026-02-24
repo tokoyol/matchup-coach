@@ -1,6 +1,6 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
-type Difficulty = "easy" | "even" | "hard";
+type Difficulty = "easy" | "favored" | "even" | "not_favored" | "hard";
 type CoachLane = "top" | "jungle" | "mid" | "bot";
 type DataLane = "top" | "jungle" | "mid" | "adc" | "support";
 
@@ -37,6 +37,13 @@ interface CoachResponse {
     generatedAt: string;
     dataConfidence: "low" | "medium" | "high";
     sampleSize: number;
+    winRate: number | null;
+    sampleTarget: number;
+    providerSamples: {
+      riotGames: number;
+      externalGames: number;
+      effectiveGames: number;
+    };
     source: {
       stats: boolean;
       tags: boolean;
@@ -47,64 +54,28 @@ interface CoachResponse {
   };
 }
 
-interface CacheStatusResponse {
-  patch: string;
-  lane: CoachLane | "all";
-  championsSupported: number | null;
-  totalPossiblePairs: number;
-  cachedPairs: number;
-  freshPairs: number;
-  stalePairs: number;
-  coveragePct: number;
-  latestComputedAt: string | null;
-}
-
-interface LlmStatusResponse {
-  configured: boolean;
-  model?: string;
-  modelReachable?: boolean;
-  generationAvailable?: boolean;
-  status?: "ok" | "quota_exhausted" | "model_not_found" | "network_error" | "api_error";
-  message?: string;
-  httpStatus?: number;
-}
-
-interface CachedPairsResponse {
-  patch: string;
-  lane?: CoachLane | DataLane | "all";
-  count: number;
-  pairs: Array<{
-    lane?: DataLane;
-    playerChampion: string;
-    enemyChampion: string;
-    fresh: boolean;
-  }>;
-}
-
-interface CacheStatusByLaneResponse {
-  patch: string;
-  lanes: Array<{
-    lane: DataLane;
-    championsInCache: number;
-    totalPossiblePairs: number;
-    cachedPairs: number;
-    freshPairs: number;
-    archivedPairs: number;
-    coveragePct: number;
-    latestComputedAt: string | null;
-  }>;
-}
-
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const AUTO_REFRESH_INTERVAL_MS = 6000;
 
 function difficultyLabel(difficulty: Difficulty): string {
   if (difficulty === "easy") return "Easy";
+  if (difficulty === "favored") return "Favored";
+  if (difficulty === "not_favored") return "Not Favored";
   if (difficulty === "hard") return "Hard";
   return "Even";
 }
 
 function timingLabel(timing: CoachResponse["allInWindows"][number]["timing"]): string {
   return timing.replaceAll("_", " ").replace(/\b\w/g, (s) => s.toUpperCase());
+}
+
+function isGenericAllInAction(action: string): boolean {
+  const normalized = action.trim().toLowerCase();
+  return (
+    normalized === "take a short commit trade and disengage before return damage." ||
+    normalized === "use full combo and hold one key spell to secure the kill attempt." ||
+    normalized === "take a short commit trade and disengage if the enemy cooldowns return."
+  );
 }
 
 function hasRuneAdjustment(result: CoachResponse): boolean {
@@ -129,7 +100,6 @@ export default function App() {
   const [primaryChampions, setPrimaryChampions] = useState<string[]>([]);
   const [partnerChampions, setPartnerChampions] = useState<string[]>([]);
   const [selectedLane, setSelectedLane] = useState<CoachLane>("top");
-  const [coverageRoleFilter, setCoverageRoleFilter] = useState<DataLane | "all">("all");
   const [patch, setPatch] = useState<string>("--");
   const [playerChampion, setPlayerChampion] = useState<string>("");
   const [enemyChampion, setEnemyChampion] = useState<string>("");
@@ -139,14 +109,7 @@ export default function App() {
   const [loading, setLoading] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string>("");
   const [submitError, setSubmitError] = useState<string>("");
-  const [llmStatus, setLlmStatus] = useState<LlmStatusResponse | null>(null);
-  const [cacheStatus, setCacheStatus] = useState<CacheStatusResponse | null>(null);
-  const [adminError, setAdminError] = useState<string>("");
-  const [adminLoading, setAdminLoading] = useState<boolean>(false);
-  const [cachedPairsPrimary, setCachedPairsPrimary] = useState<CachedPairsResponse["pairs"]>([]);
-  const [cachedPairsPartner, setCachedPairsPartner] = useState<CachedPairsResponse["pairs"]>([]);
-  const [cacheStatusByLane, setCacheStatusByLane] = useState<CacheStatusByLaneResponse["lanes"]>([]);
-  const [onlyCachedMatchups, setOnlyCachedMatchups] = useState<boolean>(true);
+  const [showDifficultyHelp, setShowDifficultyHelp] = useState<boolean>(false);
 
   useEffect(() => {
     let active = true;
@@ -198,115 +161,14 @@ export default function App() {
     };
   }, [selectedLane]);
 
-  const refreshAdminDiagnostics = async () => {
-    setAdminError("");
-    setAdminLoading(true);
-    try {
-      const [llmRes, cacheRes, cacheByLaneRes] = await Promise.all([
-        fetch(`${API_BASE}/api/admin/llm-status`),
-        fetch(
-          `${API_BASE}/api/admin/cache-status?patch=${encodeURIComponent(patch)}&lane=${encodeURIComponent(selectedLane)}`
-        ),
-        fetch(`${API_BASE}/api/admin/cache-status-by-lane?patch=${encodeURIComponent(patch)}`)
-      ]);
-      const pairEndpoints =
-        selectedLane === "bot"
-          ? [
-              `${API_BASE}/api/admin/cached-pairs?patch=${encodeURIComponent(patch)}&lane=adc&freshOnly=true&limit=1000`,
-              `${API_BASE}/api/admin/cached-pairs?patch=${encodeURIComponent(patch)}&lane=support&freshOnly=true&limit=1000`
-            ]
-          : [
-              `${API_BASE}/api/admin/cached-pairs?patch=${encodeURIComponent(patch)}&lane=${encodeURIComponent(selectedLane)}&freshOnly=true&limit=1000`
-            ];
-      const pairResponses = await Promise.all(pairEndpoints.map((url) => fetch(url)));
-
-      const llmPayload = (await llmRes.json()) as LlmStatusResponse;
-      const cachePayload = (await cacheRes.json()) as CacheStatusResponse | { error?: string };
-      const cacheByLanePayload = (await cacheByLaneRes.json()) as CacheStatusByLaneResponse | { error?: string };
-      const pairPayloads = (await Promise.all(
-        pairResponses.map((response) => response.json() as Promise<CachedPairsResponse | { error?: string }>)
-      )) as Array<CachedPairsResponse | { error?: string }>;
-
-      if (!llmRes.ok) {
-        throw new Error(llmPayload?.message ?? `LLM status failed (${llmRes.status})`);
-      }
-      if (!cacheRes.ok) {
-        throw new Error((cachePayload as { error?: string })?.error ?? `Cache status failed (${cacheRes.status})`);
-      }
-      if (!cacheByLaneRes.ok) {
-        throw new Error(
-          (cacheByLanePayload as { error?: string })?.error ?? `Cache by lane failed (${cacheByLaneRes.status})`
-        );
-      }
-      const failedPairRes = pairResponses.find((response) => !response.ok);
-      if (failedPairRes) {
-        const payload = pairPayloads[pairResponses.indexOf(failedPairRes)] as { error?: string };
-        throw new Error(payload?.error ?? `Cached pairs failed (${failedPairRes.status})`);
-      }
-
-      setLlmStatus(llmPayload);
-      setCacheStatus(cachePayload as CacheStatusResponse);
-      setCacheStatusByLane((cacheByLanePayload as CacheStatusByLaneResponse).lanes);
-      if (selectedLane === "bot") {
-        setCachedPairsPrimary((pairPayloads[0] as CachedPairsResponse).pairs);
-        setCachedPairsPartner((pairPayloads[1] as CachedPairsResponse).pairs);
-      } else {
-        setCachedPairsPrimary((pairPayloads[0] as CachedPairsResponse).pairs);
-        setCachedPairsPartner([]);
-      }
-    } catch (error) {
-      setAdminError(error instanceof Error ? error.message : "Failed to load diagnostics.");
-    } finally {
-      setAdminLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (patch === "--") return;
-    refreshAdminDiagnostics();
-  }, [patch, selectedLane]);
-
-  const filteredLaneCoverage = useMemo(() => {
-    if (coverageRoleFilter === "all") return cacheStatusByLane;
-    return cacheStatusByLane.filter((entry) => entry.lane === coverageRoleFilter);
-  }, [cacheStatusByLane, coverageRoleFilter]);
-
-  const cachedEnemyMap = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const pair of cachedPairsPrimary) {
-      if (!map.has(pair.playerChampion)) map.set(pair.playerChampion, []);
-      map.get(pair.playerChampion)!.push(pair.enemyChampion);
-    }
-    for (const [player, enemies] of map.entries()) {
-      map.set(player, [...new Set(enemies)].sort((a, b) => a.localeCompare(b)));
-    }
-    return map;
-  }, [cachedPairsPrimary]);
-
-  const cachedPartnerEnemyMap = useMemo(() => {
-    const map = new Map<string, string[]>();
-    for (const pair of cachedPairsPartner) {
-      if (!map.has(pair.playerChampion)) map.set(pair.playerChampion, []);
-      map.get(pair.playerChampion)!.push(pair.enemyChampion);
-    }
-    for (const [player, enemies] of map.entries()) {
-      map.set(player, [...new Set(enemies)].sort((a, b) => a.localeCompare(b)));
-    }
-    return map;
-  }, [cachedPairsPartner]);
-
   const enemyOptions = useMemo(() => {
-    if (!onlyCachedMatchups) return primaryChampions.filter((champion) => champion !== playerChampion);
-    return (cachedEnemyMap.get(playerChampion) ?? []).filter((champion) => champion !== playerChampion);
-  }, [onlyCachedMatchups, primaryChampions, playerChampion, cachedEnemyMap]);
+    return primaryChampions.filter((champion) => champion !== playerChampion);
+  }, [primaryChampions, playerChampion]);
 
   const enemyPartnerOptions = useMemo(() => {
     if (selectedLane !== "bot") return [];
-    if (!onlyCachedMatchups) return partnerChampions.filter((champion) => champion !== playerChampionPartner);
-    return (cachedPartnerEnemyMap.get(playerChampionPartner) ?? []).filter(
-      (champion) => champion !== playerChampionPartner
-    );
-  }, [selectedLane, onlyCachedMatchups, partnerChampions, playerChampionPartner, cachedPartnerEnemyMap]);
+    return partnerChampions.filter((champion) => champion !== playerChampionPartner);
+  }, [selectedLane, partnerChampions, playerChampionPartner]);
 
   useEffect(() => {
     if (enemyOptions.length === 0) {
@@ -343,8 +205,7 @@ export default function App() {
     [loading, playerChampion, enemyChampion, selectedLane, playerChampionPartner, enemyChampionPartner]
   );
 
-  const onSubmit = async (event: FormEvent) => {
-    event.preventDefault();
+  const requestCoaching = useCallback(async () => {
     if (!canSubmit) return;
     setSubmitError("");
     setLoading(true);
@@ -375,7 +236,32 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  }, [
+    canSubmit,
+    selectedLane,
+    playerChampion,
+    enemyChampion,
+    playerChampionPartner,
+    enemyChampionPartner
+  ]);
+
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    await requestCoaching();
   };
+
+  const shouldAutoRefresh = useMemo(() => {
+    if (!result || loading || submitError) return false;
+    return result.meta.providerSamples.effectiveGames < result.meta.sampleTarget;
+  }, [result, loading, submitError]);
+
+  useEffect(() => {
+    if (!shouldAutoRefresh) return;
+    const timer = setTimeout(() => {
+      void requestCoaching();
+    }, AUTO_REFRESH_INTERVAL_MS);
+    return () => clearTimeout(timer);
+  }, [shouldAutoRefresh, requestCoaching]);
 
   return (
     <div className="page">
@@ -477,15 +363,6 @@ export default function App() {
           </div>
         )}
 
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
-            checked={onlyCachedMatchups}
-            onChange={(e) => setOnlyCachedMatchups(e.target.checked)}
-          />
-          <span>Only show cached matchups ({enemyOptions.length} options)</span>
-        </label>
-
         <button type="submit" disabled={!canSubmit}>
           {loading ? "Generating..." : "Get Matchup Coaching"}
         </button>
@@ -503,22 +380,48 @@ export default function App() {
           enemyChampion === enemyChampionPartner) ? (
           <p className="hint">For bot lane, choose both duo champions and keep ADC/support picks different.</p>
         ) : null}
-        {!loadError && onlyCachedMatchups && enemyOptions.length === 0 ? (
-          <p className="hint">No cached enemy matchup found for this champion yet.</p>
-        ) : null}
-        {!loadError && onlyCachedMatchups && selectedLane === "bot" && enemyPartnerOptions.length === 0 ? (
-          <p className="hint">No cached enemy support matchup found for this duo yet.</p>
+        {shouldAutoRefresh ? (
+          <p className="hint">
+            Collecting more sample data... auto-refreshing every {Math.floor(AUTO_REFRESH_INTERVAL_MS / 1000)}s until{" "}
+            {result?.meta.sampleTarget ?? 10}+ total games are available.
+          </p>
         ) : null}
       </form>
 
       {result ? (
         <main className="result-grid">
           <section className="card">
-            <h2>Matchup Difficulty</h2>
+            <div className="title-row">
+              <h2>Matchup Difficulty</h2>
+              <span
+                className="help-chip"
+                aria-label="Difficulty scale explanation"
+                role="button"
+                tabIndex={0}
+                onClick={() => setShowDifficultyHelp((v) => !v)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setShowDifficultyHelp((v) => !v);
+                  }
+                }}
+              >
+                ?
+              </span>
+            </div>
+            {showDifficultyHelp ? (
+              <p className="hint">
+                Difficulty score uses weighted lane stats when available (gold diff @15, win rate, early skirmish kills
+                minus deaths). Tiers: Easy, Favored, Even, Not Favored, Hard.
+              </p>
+            ) : null}
             <p className={`difficulty ${result.difficulty}`}>{difficultyLabel(result.difficulty)}</p>
             <p className="meta">
               {result.matchup.playerChampion} vs {result.matchup.enemyChampion} | {result.matchup.lane.toUpperCase()} |{" "}
               {result.matchup.patch}
+            </p>
+            <p className="meta">
+              Win rate: {result.meta.winRate !== null ? `${(result.meta.winRate * 100).toFixed(1)}%` : "N/A"}
             </p>
             {result.matchup.lane === "bot" && result.matchup.playerChampionPartner && result.matchup.enemyChampionPartner ? (
               <p className="meta">
@@ -547,7 +450,8 @@ export default function App() {
             <ul>
               {result.allInWindows.map((window) => (
                 <li key={`${window.timing}-${window.signal}`}>
-                  <strong>{timingLabel(window.timing)}:</strong> {window.signal} {"->"} {window.action}
+                  <strong>{timingLabel(window.timing)}:</strong> {window.signal}
+                  {!isGenericAllInAction(window.action) ? <> {"->"} {window.action}</> : null}
                 </li>
               ))}
             </ul>
@@ -604,6 +508,15 @@ export default function App() {
                 <strong>Sample size:</strong> {result.meta.sampleSize}
               </li>
               <li>
+                <strong>Riot games:</strong> {result.meta.providerSamples.riotGames}/{result.meta.sampleTarget}
+              </li>
+              <li>
+                <strong>Lolalytics games:</strong> {result.meta.providerSamples.externalGames}
+              </li>
+              <li>
+                <strong>Effective games:</strong> {result.meta.providerSamples.effectiveGames}
+              </li>
+              <li>
                 <strong>Stats used:</strong> {String(result.meta.source.stats)}
               </li>
               <li>
@@ -617,113 +530,6 @@ export default function App() {
         </main>
       ) : null}
 
-      <section className="card admin-panel">
-        <div className="admin-header">
-          <h2>Admin Diagnostics</h2>
-          <button type="button" onClick={refreshAdminDiagnostics} disabled={adminLoading}>
-            {adminLoading ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
-
-        {adminError ? <p className="error">{adminError}</p> : null}
-
-        <div className="result-grid">
-          <section className="card">
-            <h2>Gemini Status</h2>
-            {llmStatus ? (
-              <ul>
-                <li>
-                  <strong>Configured:</strong> {String(llmStatus.configured)}
-                </li>
-                <li>
-                  <strong>Model:</strong> {llmStatus.model ?? "-"}
-                </li>
-                <li>
-                  <strong>Reachable:</strong> {String(llmStatus.modelReachable ?? false)}
-                </li>
-                <li>
-                  <strong>Generation available:</strong> {String(llmStatus.generationAvailable ?? false)}
-                </li>
-                <li>
-                  <strong>Status:</strong> {llmStatus.status ?? "-"}
-                </li>
-              </ul>
-            ) : (
-              <p className="hint">No status data yet.</p>
-            )}
-            {llmStatus?.message ? <p className="hint">{llmStatus.message}</p> : null}
-          </section>
-
-          <section className="card">
-            <h2>Cache Status</h2>
-            {cacheStatus ? (
-              <ul>
-                <li>
-                  <strong>Patch:</strong> {cacheStatus.patch}
-                </li>
-                <li>
-                  <strong>Coverage:</strong> {cacheStatus.coveragePct}%
-                </li>
-                <li>
-                  <strong>Fresh pairs:</strong> {cacheStatus.freshPairs}
-                </li>
-                <li>
-                  <strong>Cached pairs:</strong> {cacheStatus.cachedPairs}/{cacheStatus.totalPossiblePairs}
-                </li>
-                <li>
-                  <strong>Latest compute:</strong>{" "}
-                  {cacheStatus.latestComputedAt ? new Date(cacheStatus.latestComputedAt).toLocaleString() : "-"}
-                </li>
-              </ul>
-            ) : (
-              <p className="hint">No cache data yet.</p>
-            )}
-          </section>
-        </div>
-
-        <section className="card lane-coverage-card">
-          <div className="admin-header">
-            <h2>Lane Coverage</h2>
-            <label>
-              Role filter
-              <select
-                value={coverageRoleFilter}
-                  onChange={(e) => setCoverageRoleFilter(e.target.value as DataLane | "all")}
-              >
-                <option value="all">All</option>
-                <option value="top">Top</option>
-                <option value="jungle">Jungle</option>
-                <option value="mid">Mid</option>
-                <option value="adc">ADC</option>
-                <option value="support">Support</option>
-              </select>
-            </label>
-          </div>
-          {filteredLaneCoverage.length > 0 ? (
-            <div className="lane-coverage-table">
-              {filteredLaneCoverage.map((entry) => (
-                <div key={entry.lane} className="lane-row">
-                  <div className="lane-row-header">
-                    <strong>{entry.lane.toUpperCase()}</strong>
-                    <span>
-                      {entry.cachedPairs}/{entry.totalPossiblePairs} ({entry.coveragePct}%)
-                    </span>
-                  </div>
-                  <div className="lane-bar-track">
-                    <div className="lane-bar-fill" style={{ width: `${Math.min(100, Math.max(0, entry.coveragePct))}%` }} />
-                  </div>
-                  <p className="hint lane-row-meta">
-                    champs: {entry.championsInCache} | fresh: {entry.freshPairs} | archived: {entry.archivedPairs} |
-                    latest: {entry.latestComputedAt ? new Date(entry.latestComputedAt).toLocaleString() : "-"}
-                  </p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="hint">No lane coverage data yet.</p>
-          )}
-        </section>
-      </section>
     </div>
   );
 }

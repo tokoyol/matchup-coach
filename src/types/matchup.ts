@@ -1,6 +1,6 @@
 import type { CoachLane } from "../data/champions.js";
 
-export type MatchupDifficulty = "easy" | "even" | "hard";
+export type MatchupDifficulty = "easy" | "favored" | "even" | "not_favored" | "hard";
 
 export type AllInTiming =
   | "level_2"
@@ -56,6 +56,13 @@ export interface CoachMatchupResponse {
     generatedAt: string;
     dataConfidence: "low" | "medium" | "high";
     sampleSize: number;
+    winRate: number | null;
+    sampleTarget: number;
+    providerSamples: {
+      riotGames: number;
+      externalGames: number;
+      effectiveGames: number;
+    };
     source: {
       stats: boolean;
       tags: boolean;

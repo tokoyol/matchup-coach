@@ -1,8 +1,8 @@
 import { RIOT_TEAM_POSITION_BY_LANE, SUPPORTED_LANES, type SupportedLane } from "../data/champions.js";
 import type { MatchupStats } from "../types/stats.js";
 import { toRiotPatchPrefix } from "../utils/patch.js";
-import { MatchupStatsRepository } from "./matchupStatsRepository.js";
 import { RiotApiClient } from "./riotApiClient.js";
+import type { MatchupStatsStore } from "./matchupStatsStore.js";
 
 interface AggregationBucket {
   games: number;
@@ -68,7 +68,7 @@ async function runWithConcurrency<T, U>(
 export class RiotPrecomputeService {
   constructor(
     private readonly riotClient: RiotApiClient,
-    private readonly repository: MatchupStatsRepository,
+    private readonly repository: MatchupStatsStore,
     private readonly cacheTtlMs: number
   ) {}
 
