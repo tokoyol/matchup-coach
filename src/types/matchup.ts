@@ -63,6 +63,12 @@ export interface CoachMatchupResponse {
       externalGames: number;
       effectiveGames: number;
     };
+    externalSource: {
+      provider: string;
+      status: "success" | "cache_hit" | "http_error" | "timeout" | "network_error" | "parse_miss";
+      failureReason?: string;
+      httpStatus?: number;
+    } | null;
     source: {
       stats: boolean;
       tags: boolean;

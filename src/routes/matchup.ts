@@ -150,6 +150,14 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       let riotPartnerStats: MatchupStats | null = null;
       let externalPrimaryStats: MatchupStats | null = null;
       let externalPartnerStats: MatchupStats | null = null;
+      let externalSourceMeta:
+        | {
+            provider: string;
+            status: "success" | "cache_hit" | "http_error" | "timeout" | "network_error" | "parse_miss";
+            failureReason?: string;
+            httpStatus?: number;
+          }
+        | null = null;
       let liveStatsWarning = "";
       let usedExternalProvider: string | null = null;
       const patch = parseInput.data.patch ?? currentPatch;
@@ -236,16 +244,27 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
                 "External matchup source timed out."
               )
             ]);
-            if (externalAdc?.stats && (primaryStats?.games ?? 0) < externalAdc.stats.games) {
-              externalPrimaryStats = externalAdc.stats;
-              primaryStats = externalAdc.stats;
-              usedExternalProvider = externalAdc.provider;
+            const adcResult = externalAdc.result;
+            const supportResult = externalSupport.result;
+            if (adcResult?.stats && (primaryStats?.games ?? 0) < adcResult.stats.games) {
+              externalPrimaryStats = adcResult.stats;
+              primaryStats = adcResult.stats;
+              usedExternalProvider = adcResult.provider;
             }
-            if (externalSupport?.stats && (partnerStats?.games ?? 0) < externalSupport.stats.games) {
-              externalPartnerStats = externalSupport.stats;
-              partnerStats = externalSupport.stats;
-              usedExternalProvider = externalSupport.provider;
+            if (supportResult?.stats && (partnerStats?.games ?? 0) < supportResult.stats.games) {
+              externalPartnerStats = supportResult.stats;
+              partnerStats = supportResult.stats;
+              usedExternalProvider = supportResult.provider;
             }
+            const preferredOutcome =
+              [externalAdc, externalSupport].find((o) => o.status !== "success" && o.status !== "cache_hit") ??
+              externalAdc;
+            externalSourceMeta = {
+              provider: preferredOutcome.provider,
+              status: preferredOutcome.status,
+              failureReason: preferredOutcome.failureReason,
+              httpStatus: preferredOutcome.httpStatus
+            };
           } else {
             const externalStats = await withTimeout(
               externalStatsProvider.getMatchupStats({
@@ -257,10 +276,17 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
               4_000,
               "External matchup source timed out."
             );
-            if (externalStats?.stats && (primaryStats?.games ?? 0) < externalStats.stats.games) {
-              externalPrimaryStats = externalStats.stats;
-              primaryStats = externalStats.stats;
-              usedExternalProvider = externalStats.provider;
+            externalSourceMeta = {
+              provider: externalStats.provider,
+              status: externalStats.status,
+              failureReason: externalStats.failureReason,
+              httpStatus: externalStats.httpStatus
+            };
+            const externalResult = externalStats.result;
+            if (externalResult?.stats && (primaryStats?.games ?? 0) < externalResult.stats.games) {
+              externalPrimaryStats = externalResult.stats;
+              primaryStats = externalResult.stats;
+              usedExternalProvider = externalResult.provider;
             }
           }
         } catch {
@@ -290,7 +316,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             riotGames: riotSampleSize,
             externalGames: externalSampleSize,
             effectiveGames: currentSampleSize
-          }
+          },
+          externalSource: externalSourceMeta
         }
       );
       if (liveStatsWarning) {
@@ -299,6 +326,11 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       if (usedExternalProvider) {
         coaching.meta.warnings = [
           `Using fast provisional stats from ${usedExternalProvider} while Riot sample backfill continues.`,
+          ...coaching.meta.warnings
+        ];
+      } else if (externalSourceMeta && externalSourceMeta.status !== "success" && externalSourceMeta.status !== "cache_hit") {
+        coaching.meta.warnings = [
+          `External source unavailable (${externalSourceMeta.status})${externalSourceMeta.failureReason ? `: ${externalSourceMeta.failureReason}` : ""}`,
           ...coaching.meta.warnings
         ];
       }

@@ -140,12 +140,19 @@ export class LolalyticsScrapeProvider implements ExternalMatchupStatsProvider {
     private readonly cacheTtlMs: number = 30 * 60 * 1000
   ) {}
 
-  async getMatchupStats(input: ExternalMatchupLookupInput): Promise<ExternalMatchupLookupResult | null> {
+  async getMatchupStats(input: ExternalMatchupLookupInput): Promise<ExternalMatchupLookupOutcome> {
     const lane = mapLaneToLolalytics(input.lane);
     const patch = normalizePatch(input.patch);
     const player = championKey(input.playerChampion);
     const enemy = championKey(input.enemyChampion);
-    if (!player || !enemy) return null;
+    if (!player || !enemy) {
+      return {
+        provider: "lolalytics",
+        status: "parse_miss",
+        result: null,
+        failureReason: "Invalid champion input for external lookup."
+      };
+    }
     const cacheKey = `${input.patch}:${input.lane}:${player}:${enemy}`;
     const now = Date.now();
     const cached = this.cache.get(cacheKey);
@@ -224,7 +231,14 @@ export class LolalyticsScrapeProvider implements ExternalMatchupStatsProvider {
 
       const parsed = JSON.parse(nextDataMatch[1]) as unknown;
       const best = scanForBestStatsNode(parsed);
-      if (!best || best.games <= 0) return null;
+      if (!best || best.games <= 0) {
+        return {
+          provider: "lolalytics",
+          status: "parse_miss",
+          result: null,
+          failureReason: "External JSON payload had no usable matchup stats."
+        };
+      }
 
       const result = {
         provider: "lolalytics",

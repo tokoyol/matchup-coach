@@ -203,6 +203,12 @@ export async function generateMatchupCoaching(
       externalGames: number;
       effectiveGames: number;
     };
+    externalSource?: {
+      provider: string;
+      status: "success" | "cache_hit" | "http_error" | "timeout" | "network_error" | "parse_miss";
+      failureReason?: string;
+      httpStatus?: number;
+    } | null;
   }
 ): Promise<CoachMatchupResponseOutput> {
   const patch = input.patch ?? currentPatch;
@@ -307,6 +313,7 @@ export async function generateMatchupCoaching(
           Math.floor(options?.providerSamples?.effectiveGames ?? (stats?.games ?? 0) + (partnerStats?.games ?? 0))
         )
       },
+      externalSource: options?.externalSource ?? null,
       source: {
         stats: hasStats,
         tags: true,

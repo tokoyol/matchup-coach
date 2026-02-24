@@ -85,6 +85,14 @@ export const coachMatchupResponseSchema = z
         externalGames: z.number().int().nonnegative(),
         effectiveGames: z.number().int().nonnegative()
       }),
+      externalSource: z
+        .object({
+          provider: z.string(),
+          status: z.enum(["success", "cache_hit", "http_error", "timeout", "network_error", "parse_miss"]),
+          failureReason: z.string().optional(),
+          httpStatus: z.number().int().optional()
+        })
+        .nullable(),
       source: z.object({
         stats: z.boolean(),
         tags: z.boolean(),
