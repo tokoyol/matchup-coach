@@ -289,8 +289,12 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
               usedExternalProvider = externalResult.provider;
             }
           }
-        } catch {
-          // Ignore external source failures and continue with Riot/fallback.
+        } catch (error) {
+          externalSourceMeta = {
+            provider: "lolalytics",
+            status: "timeout",
+            failureReason: error instanceof Error ? error.message : "External source lookup failed."
+          };
         }
       }
 
