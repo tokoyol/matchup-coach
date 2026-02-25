@@ -1,0 +1,48 @@
+name: Scheduled Lolalytics Refresh
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  scrape-lolalytics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      LOLALYTICS_PATCH: ${{ vars.LOLALYTICS_PATCH || '26.4' }}
+      LOLALYTICS_MAX_CHAMPIONS: ${{ vars.LOLALYTICS_MAX_CHAMPIONS || '80' }}
+      LOLALYTICS_REQUEST_DELAY_MS: ${{ vars.LOLALYTICS_REQUEST_DELAY_MS || '150' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate required secrets
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL secret is required."
+            exit 1
+          fi
+
+      - name: Run all-lane Lolalytics scrape to Supabase
+        env:
+          DB_PROVIDER: postgres
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
+        run: |
+          npm run scrape:lolalytics:all -- \
+            --patch "$LOLALYTICS_PATCH" \
+            --allChampions \
+            --maxChampions "$LOLALYTICS_MAX_CHAMPIONS" \
+            --requestDelayMs "$LOLALYTICS_REQUEST_DELAY_MS"
