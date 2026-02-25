@@ -6,7 +6,7 @@ dotenv.config();
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().default("*"),
-  CURRENT_PATCH: z.string().regex(/^[0-9]{2}\.[0-9]{1,2}$/).default("14.3"),
+  CURRENT_PATCH: z.string().regex(/^[0-9]{2}\.[0-9]{1,2}$/).default("26.4"),
   RIOT_API_KEY: z.string().min(10).optional(),
   RIOT_PLATFORM_ROUTE: z
     .enum(["br1", "eun1", "euw1", "jp1", "kr", "la1", "la2", "na1", "oc1", "tr1", "ru"])
@@ -20,6 +20,7 @@ const envSchema = z.object({
   EXTERNAL_STATS_PROVIDER: z.enum(["none", "lolalytics"]).default("none"),
   EXTERNAL_STATS_TIMEOUT_MS: z.coerce.number().int().positive().default(3500),
   GEMINI_API_KEY: z.string().min(10).optional(),
+  GEMINI_API_KEYS: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
   DB_PROVIDER: z.enum(["sqlite", "postgres"]).default("sqlite"),
   DATABASE_URL: z.string().url().optional(),

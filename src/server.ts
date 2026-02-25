@@ -30,9 +30,21 @@ async function bootstrap(): Promise<void> {
   let missingPairBackfillService: MissingPairBackfillService | undefined;
   let externalStatsProvider: ExternalMatchupStatsProvider | undefined;
   let statsRepository: MatchupStatsStore | undefined;
-  const geminiCoachService = env.GEMINI_API_KEY
+  const geminiKeys = [
+    ...new Set(
+      [
+        ...(env.GEMINI_API_KEYS
+          ? env.GEMINI_API_KEYS.split(",")
+              .map((value) => value.trim())
+              .filter((value) => value.length > 0)
+          : []),
+        ...(env.GEMINI_API_KEY ? [env.GEMINI_API_KEY] : [])
+      ].filter((value) => value.length > 0)
+    )
+  ];
+  const geminiCoachService = geminiKeys.length > 0
     ? new GeminiCoachService({
-        apiKey: env.GEMINI_API_KEY,
+        apiKeys: geminiKeys,
         model: env.GEMINI_MODEL
       })
     : undefined;

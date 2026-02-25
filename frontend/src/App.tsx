@@ -267,7 +267,7 @@ export default function App() {
     <div className="page">
       <header className="hero">
         <h1>Lane Matchup Coach</h1>
-        <p>Patch {patch} | MVP Focus: pre-lane preparation by role</p>
+        <p>Patch {patch}</p>
       </header>
 
       <form className="card form" onSubmit={onSubmit}>
@@ -506,15 +506,6 @@ export default function App() {
               </li>
               <li>
                 <strong>Sample size:</strong> {result.meta.sampleSize}
-              </li>
-              <li>
-                <strong>Riot games:</strong> {result.meta.providerSamples.riotGames}/{result.meta.sampleTarget}
-              </li>
-              <li>
-                <strong>Lolalytics games:</strong> {result.meta.providerSamples.externalGames}
-              </li>
-              <li>
-                <strong>Effective games:</strong> {result.meta.providerSamples.effectiveGames}
               </li>
               <li>
                 <strong>Stats used:</strong> {String(result.meta.source.stats)}

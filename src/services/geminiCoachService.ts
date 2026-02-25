@@ -48,7 +48,8 @@ export interface GeminiAdvice {
 }
 
 interface GeminiCoachServiceOptions {
-  apiKey: string;
+  apiKey?: string;
+  apiKeys?: string[];
   model: string;
 }
 
@@ -225,7 +226,20 @@ function normalizeAdvice(input: GeminiAdviceRaw): GeminiAdvice {
 }
 
 export class GeminiCoachService {
-  constructor(private readonly options: GeminiCoachServiceOptions) {}
+  private readonly apiKeys: string[];
+
+  constructor(private readonly options: GeminiCoachServiceOptions) {
+    const keys = [
+      ...(options.apiKeys ?? []),
+      ...(options.apiKey ? [options.apiKey] : [])
+    ]
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    this.apiKeys = [...new Set(keys)];
+    if (this.apiKeys.length === 0) {
+      throw new Error("GeminiCoachService requires at least one API key.");
+    }
+  }
 
   private async fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
     const controller = new AbortController();
@@ -244,75 +258,102 @@ export class GeminiCoachService {
     return this.options.model.replace(/^models\//, "");
   }
 
+  private isRetryableKeyFailure(status: number, body: string): boolean {
+    if (status === 429) return true;
+    if (status === 401 || status === 403) return true;
+    if (status === 400 && /(api key not valid|invalid api key|permission denied|key invalid)/i.test(body)) {
+      return true;
+    }
+    return false;
+  }
+
   async getStatus(): Promise<GeminiStatus> {
     const normalizedModel = this.getNormalizedModel();
     const baseUrl = "https://generativelanguage.googleapis.com/v1beta";
-    const modelInfoUrl = `${baseUrl}/models/${normalizedModel}?key=${this.options.apiKey}`;
+    let lastStatus: GeminiStatus | null = null;
 
-    try {
-      const modelResponse = await this.fetchWithTimeout(modelInfoUrl, { method: "GET" }, 7_000);
-      if (!modelResponse.ok) {
-        const text = await modelResponse.text();
-        return {
+    for (let idx = 0; idx < this.apiKeys.length; idx += 1) {
+      const apiKey = this.apiKeys[idx];
+      const modelInfoUrl = `${baseUrl}/models/${normalizedModel}?key=${apiKey}`;
+      try {
+        const modelResponse = await this.fetchWithTimeout(modelInfoUrl, { method: "GET" }, 7_000);
+        if (!modelResponse.ok) {
+          const text = await modelResponse.text();
+          lastStatus = {
+            configured: true,
+            model: normalizedModel,
+            modelReachable: false,
+            generationAvailable: false,
+            status: modelResponse.status === 404 ? "model_not_found" : "api_error",
+            message: `Model check failed: HTTP ${modelResponse.status}. ${text.slice(0, 300)}`.trim(),
+            httpStatus: modelResponse.status
+          };
+          if (this.isRetryableKeyFailure(modelResponse.status, text) && idx < this.apiKeys.length - 1) continue;
+          return lastStatus;
+        }
+
+        const generateUrl = `${baseUrl}/models/${normalizedModel}:generateContent?key=${apiKey}`;
+        const generationResponse = await this.fetchWithTimeout(
+          generateUrl,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: "Return: {\"ok\":true}" }] }],
+              generationConfig: { temperature: 0 }
+            })
+          },
+          9_000
+        );
+
+        if (generationResponse.ok) {
+          return {
+            configured: true,
+            model: normalizedModel,
+            modelReachable: true,
+            generationAvailable: true,
+            status: "ok",
+            message: "Gemini is reachable and generation is available."
+          };
+        }
+
+        const errorBody = await generationResponse.text();
+        const quotaSignal =
+          generationResponse.status === 429 &&
+          /(quota|resource_exhausted|rate limit|limit: 0)/i.test(errorBody);
+        lastStatus = {
+          configured: true,
+          model: normalizedModel,
+          modelReachable: true,
+          generationAvailable: false,
+          status: quotaSignal ? "quota_exhausted" : "api_error",
+          message: `Generation failed: HTTP ${generationResponse.status}. ${errorBody.slice(0, 350)}`.trim(),
+          httpStatus: generationResponse.status
+        };
+        if (this.isRetryableKeyFailure(generationResponse.status, errorBody) && idx < this.apiKeys.length - 1) continue;
+        return lastStatus;
+      } catch (error) {
+        lastStatus = {
           configured: true,
           model: normalizedModel,
           modelReachable: false,
           generationAvailable: false,
-          status: modelResponse.status === 404 ? "model_not_found" : "api_error",
-          message: `Model check failed: HTTP ${modelResponse.status}. ${text.slice(0, 300)}`.trim(),
-          httpStatus: modelResponse.status
+          status: "network_error",
+          message: error instanceof Error ? error.message : "Unknown network error"
         };
       }
+    }
 
-      const generateUrl = `${baseUrl}/models/${normalizedModel}:generateContent?key=${this.options.apiKey}`;
-      const generationResponse = await this.fetchWithTimeout(
-        generateUrl,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: "Return: {\"ok\":true}" }] }],
-            generationConfig: { temperature: 0 }
-          })
-        },
-        9_000
-      );
-
-      if (generationResponse.ok) {
-        return {
-          configured: true,
-          model: normalizedModel,
-          modelReachable: true,
-          generationAvailable: true,
-          status: "ok",
-          message: "Gemini is reachable and generation is available."
-        };
-      }
-
-      const errorBody = await generationResponse.text();
-      const quotaSignal =
-        generationResponse.status === 429 &&
-        /(quota|resource_exhausted|rate limit|limit: 0)/i.test(errorBody);
-
-      return {
-        configured: true,
-        model: normalizedModel,
-        modelReachable: true,
-        generationAvailable: false,
-        status: quotaSignal ? "quota_exhausted" : "api_error",
-        message: `Generation failed: HTTP ${generationResponse.status}. ${errorBody.slice(0, 350)}`.trim(),
-        httpStatus: generationResponse.status
-      };
-    } catch (error) {
-      return {
+    return (
+      lastStatus ?? {
         configured: true,
         model: normalizedModel,
         modelReachable: false,
         generationAvailable: false,
-        status: "network_error",
-        message: error instanceof Error ? error.message : "Unknown network error"
-      };
-    }
+        status: "api_error",
+        message: "All configured Gemini keys failed."
+      }
+    );
   }
 
   async generateAdvice(input: {
@@ -363,67 +404,76 @@ partnerStats=${partnerStatsBlock}
 `.trim();
 
     const normalizedModel = this.getNormalizedModel();
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${normalizedModel}:generateContent?key=${this.options.apiKey}`;
-    try {
-      const response = await this.fetchWithTimeout(
-        url,
-        {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.35
-          }
-        })
-      },
-        10_000
-      );
-
-      if (!response.ok) {
-        const body = await response.text();
-        return {
-          advice: null,
-          failureReason: `Gemini HTTP ${response.status}: ${body.slice(0, 200)}`
-        };
-      }
-
-      let payload: Record<string, unknown>;
+    let lastFailure = "Gemini request failed unexpectedly.";
+    for (let idx = 0; idx < this.apiKeys.length; idx += 1) {
+      const apiKey = this.apiKeys[idx];
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${normalizedModel}:generateContent?key=${apiKey}`;
       try {
-        payload = (await response.json()) as Record<string, unknown>;
-      } catch {
-        return { advice: null, failureReason: "Gemini returned invalid JSON payload." };
-      }
-      const candidates = (payload.candidates ?? []) as Array<Record<string, unknown>>;
-      const text = candidates?.[0]?.content
-        ? (((candidates[0].content as Record<string, unknown>).parts ?? []) as Array<Record<string, unknown>>)[0]?.text
-        : undefined;
+        const response = await this.fetchWithTimeout(
+          url,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.35
+              }
+            })
+          },
+          10_000
+        );
 
-      if (typeof text !== "string" || !text.trim()) {
-        return { advice: null, failureReason: "Gemini response had no text content." };
-      }
-
-      const jsonText = extractJsonObject(text);
-      const parsedJson = tryLenientParse(jsonText);
-      if (!parsedJson) {
-        const normalized = normalizeFromPlainText(text);
-        if (normalized) return { advice: normalized };
-        return { advice: null, failureReason: "Gemini text was not parseable JSON." };
-      }
-      const parsedAdvice = geminiAdviceSchema.safeParse(parsedJson);
-      if (!parsedAdvice.success) {
-        const normalized = normalizeFromPlainText(text);
-        if (normalized) {
-          return { advice: normalized };
+        if (!response.ok) {
+          const body = await response.text();
+          lastFailure = `Gemini HTTP ${response.status}: ${body.slice(0, 200)}`;
+          if (this.isRetryableKeyFailure(response.status, body) && idx < this.apiKeys.length - 1) continue;
+          return { advice: null, failureReason: lastFailure };
         }
-        return { advice: null, failureReason: "Gemini JSON did not match expected coaching schema." };
+
+        let payload: Record<string, unknown>;
+        try {
+          payload = (await response.json()) as Record<string, unknown>;
+        } catch {
+          lastFailure = "Gemini returned invalid JSON payload.";
+          return { advice: null, failureReason: lastFailure };
+        }
+        const candidates = (payload.candidates ?? []) as Array<Record<string, unknown>>;
+        const text = candidates?.[0]?.content
+          ? (((candidates[0].content as Record<string, unknown>).parts ?? []) as Array<Record<string, unknown>>)[0]?.text
+          : undefined;
+
+        if (typeof text !== "string" || !text.trim()) {
+          lastFailure = "Gemini response had no text content.";
+          return { advice: null, failureReason: lastFailure };
+        }
+
+        const jsonText = extractJsonObject(text);
+        const parsedJson = tryLenientParse(jsonText);
+        if (!parsedJson) {
+          const normalized = normalizeFromPlainText(text);
+          if (normalized) return { advice: normalized };
+          lastFailure = "Gemini text was not parseable JSON.";
+          return { advice: null, failureReason: lastFailure };
+        }
+        const parsedAdvice = geminiAdviceSchema.safeParse(parsedJson);
+        if (!parsedAdvice.success) {
+          const normalized = normalizeFromPlainText(text);
+          if (normalized) {
+            return { advice: normalized };
+          }
+          lastFailure = "Gemini JSON did not match expected coaching schema.";
+          return { advice: null, failureReason: lastFailure };
+        }
+        return { advice: normalizeAdvice(parsedAdvice.data) };
+      } catch (error) {
+        lastFailure = error instanceof Error ? error.message : "Gemini request failed unexpectedly.";
       }
-      return { advice: normalizeAdvice(parsedAdvice.data) };
-    } catch (error) {
-      return {
-        advice: null,
-        failureReason: error instanceof Error ? error.message : "Gemini request failed unexpectedly."
-      };
     }
+
+    return {
+      advice: null,
+      failureReason: `All configured Gemini keys failed. Last error: ${lastFailure}`
+    };
   }
 }
