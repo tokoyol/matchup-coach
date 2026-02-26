@@ -175,9 +175,13 @@ async function main(): Promise<void> {
     const missingPairs = options.skipExisting
       ? allPairs.filter((pair) => !existingKeys.has(`${pair.playerChampion}:::${pair.enemyChampion}`))
       : allPairs;
-    const start = Math.min(options.startIndex, Math.max(0, missingPairs.length - 1));
+    const start = options.startIndex;
     const selectedPairs =
-      options.maxPairs > 0 ? missingPairs.slice(start, start + options.maxPairs) : missingPairs.slice(start);
+      missingPairs.length === 0 || start >= missingPairs.length
+        ? []
+        : options.maxPairs > 0
+          ? missingPairs.slice(start, start + options.maxPairs)
+          : missingPairs.slice(start);
 
     console.log(
       `[lolalytics] start patch=${options.patch} lane=${lane} champions=${champions.length} totalPairs=${allPairs.length} missingPairs=${missingPairs.length} selectedPairs=${selectedPairs.length} startIndex=${start} skipExisting=${options.skipExisting}`

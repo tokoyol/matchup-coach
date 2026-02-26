@@ -5,27 +5,23 @@ on:
     - cron: "0 */6 * * *"
   workflow_dispatch:
 
-jobs:
-  scrape-lolalytics:
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    env:
-      LOLALYTICS_PATCH: ${{ vars.LOLALYTICS_PATCH || '26.4' }}
-      LOLALYTICS_MAX_CHAMPIONS: ${{ vars.LOLALYTICS_MAX_CHAMPIONS || '80' }}
-      LOLALYTICS_REQUEST_DELAY_MS: ${{ vars.LOLALYTICS_REQUEST_DELAY_MS || '150' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+env:
+  LOLALYTICS_PATCH: ${{ vars.LOLALYTICS_PATCH || '26.4' }}
+  LOLALYTICS_MAX_CHAMPIONS: ${{ vars.LOLALYTICS_MAX_CHAMPIONS || '80' }}
+  LOLALYTICS_REQUEST_DELAY_MS: ${{ vars.LOLALYTICS_REQUEST_DELAY_MS || '150' }}
+  LOLALYTICS_ROLE_MAX_PAIRS: ${{ vars.LOLALYTICS_ROLE_MAX_PAIRS || '2000' }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+jobs:
+  scrape-top:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
-
-      - name: Install dependencies
-        run: npm ci
-
+      - run: npm ci
       - name: Validate required secrets
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
@@ -34,26 +30,136 @@ jobs:
             echo "DATABASE_URL secret is required."
             exit 1
           fi
-
-      - name: Run all-lane Lolalytics scrape to Supabase
+      - name: Scrape top
         env:
           DB_PROVIDER: postgres
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
         run: |
-          npm run scrape:lolalytics:all -- \
+          npm run scrape:lolalytics -- \
             --patch "$LOLALYTICS_PATCH" \
+            --lane top \
             --allChampions \
             --maxChampions "$LOLALYTICS_MAX_CHAMPIONS" \
+            --maxPairs "$LOLALYTICS_ROLE_MAX_PAIRS" \
             --requestDelayMs "$LOLALYTICS_REQUEST_DELAY_MS"
 
+  scrape-jungle:
+    needs: scrape-top
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Scrape jungle
+        env:
+          DB_PROVIDER: postgres
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
+        run: |
+          npm run scrape:lolalytics -- \
+            --patch "$LOLALYTICS_PATCH" \
+            --lane jungle \
+            --allChampions \
+            --maxChampions "$LOLALYTICS_MAX_CHAMPIONS" \
+            --maxPairs "$LOLALYTICS_ROLE_MAX_PAIRS" \
+            --requestDelayMs "$LOLALYTICS_REQUEST_DELAY_MS"
+
+  scrape-mid:
+    needs: scrape-jungle
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Scrape mid
+        env:
+          DB_PROVIDER: postgres
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
+        run: |
+          npm run scrape:lolalytics -- \
+            --patch "$LOLALYTICS_PATCH" \
+            --lane mid \
+            --allChampions \
+            --maxChampions "$LOLALYTICS_MAX_CHAMPIONS" \
+            --maxPairs "$LOLALYTICS_ROLE_MAX_PAIRS" \
+            --requestDelayMs "$LOLALYTICS_REQUEST_DELAY_MS"
+
+  scrape-adc:
+    needs: scrape-mid
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Scrape adc
+        env:
+          DB_PROVIDER: postgres
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
+        run: |
+          npm run scrape:lolalytics -- \
+            --patch "$LOLALYTICS_PATCH" \
+            --lane adc \
+            --allChampions \
+            --maxChampions "$LOLALYTICS_MAX_CHAMPIONS" \
+            --maxPairs "$LOLALYTICS_ROLE_MAX_PAIRS" \
+            --requestDelayMs "$LOLALYTICS_REQUEST_DELAY_MS"
+
+  scrape-support:
+    needs: scrape-adc
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Scrape support
+        env:
+          DB_PROVIDER: postgres
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
+        run: |
+          npm run scrape:lolalytics -- \
+            --patch "$LOLALYTICS_PATCH" \
+            --lane support \
+            --allChampions \
+            --maxChampions "$LOLALYTICS_MAX_CHAMPIONS" \
+            --maxPairs "$LOLALYTICS_ROLE_MAX_PAIRS" \
+            --requestDelayMs "$LOLALYTICS_REQUEST_DELAY_MS"
+
+  notify-discord:
+    needs: [scrape-top, scrape-jungle, scrape-mid, scrape-adc, scrape-support]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
       - name: Discord notification
-        if: always()
         env:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
-          JOB_STATUS: ${{ job.status }}
+          TOP_RESULT: ${{ needs.scrape-top.result }}
+          JUNGLE_RESULT: ${{ needs.scrape-jungle.result }}
+          MID_RESULT: ${{ needs.scrape-mid.result }}
+          ADC_RESULT: ${{ needs.scrape-adc.result }}
+          SUPPORT_RESULT: ${{ needs.scrape-support.result }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
           MAX_CHAMPIONS: ${{ env.LOLALYTICS_MAX_CHAMPIONS }}
+          MAX_PAIRS: ${{ env.LOLALYTICS_ROLE_MAX_PAIRS }}
           REQUEST_DELAY_MS: ${{ env.LOLALYTICS_REQUEST_DELAY_MS }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
@@ -62,13 +168,15 @@ jobs:
             echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
             exit 0
           fi
-          if [ "$JOB_STATUS" = "success" ]; then
+          if [ "$TOP_RESULT" = "success" ] && [ "$JUNGLE_RESULT" = "success" ] && [ "$MID_RESULT" = "success" ] && [ "$ADC_RESULT" = "success" ] && [ "$SUPPORT_RESULT" = "success" ]; then
             ICON="✅"
+            STATUS="success"
           else
             ICON="❌"
+            STATUS="failure"
           fi
           RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
-          MSG="$ICON Lolalytics refresh $JOB_STATUS for patch $PATCH (maxChampions=$MAX_CHAMPIONS, delayMs=$REQUEST_DELAY_MS). Run: $RUN_URL"
+          MSG="$ICON Lolalytics refresh $STATUS for patch $PATCH (maxChampions=$MAX_CHAMPIONS, roleMaxPairs=$MAX_PAIRS, delayMs=$REQUEST_DELAY_MS). Lane results: top=$TOP_RESULT, jungle=$JUNGLE_RESULT, mid=$MID_RESULT, adc=$ADC_RESULT, support=$SUPPORT_RESULT. Run: $RUN_URL"
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d "{\"content\":\"$MSG\"}" || true
