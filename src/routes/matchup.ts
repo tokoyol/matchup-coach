@@ -1,4 +1,4 @@
-import { Request, Router } from "express";
+import { Router } from "express";
 import {
   SUPPORTED_LANES,
   SUPPORTED_TOP_CHAMPIONS,
@@ -10,10 +10,6 @@ import { coachMatchupRequestSchema, coachMatchupResponseSchema } from "../schema
 import { generateMatchupCoaching } from "../services/coachService.js";
 import type { ExternalMatchupStatsProvider } from "../services/externalMatchupStatsProvider.js";
 import { GeminiCoachService } from "../services/geminiCoachService.js";
-import { MissingPairBackfillService } from "../services/missingPairBackfillService.js";
-import { RiotPrecomputeService } from "../services/riotPrecomputeService.js";
-import { RiotApiClient } from "../services/riotApiClient.js";
-import { RiotMatchupStatsService } from "../services/riotMatchupStatsService.js";
 import type { MatchupStatsStore } from "../services/matchupStatsStore.js";
 import type { MatchupStats } from "../types/stats.js";
 
@@ -59,40 +55,22 @@ function clampWarning(message: string): string {
 
 interface CreateMatchupRouterOptions {
   currentPatch: string;
-  enableLiveStats: boolean;
   minSampleGames?: number;
   statsRepository?: MatchupStatsStore;
-  riotStatsService?: RiotMatchupStatsService;
-  riotApiClient?: RiotApiClient;
-  riotPrecomputeService?: RiotPrecomputeService;
-  missingPairBackfillService?: MissingPairBackfillService;
   externalStatsProvider?: ExternalMatchupStatsProvider;
   geminiCoachService?: GeminiCoachService;
-  adminApiToken?: string;
 }
 
 export function createMatchupRouter(options: CreateMatchupRouterOptions): Router {
   const {
     currentPatch,
-    enableLiveStats,
     minSampleGames,
     statsRepository,
-    riotStatsService,
-    riotApiClient,
-    riotPrecomputeService,
-    missingPairBackfillService,
     externalStatsProvider,
-    geminiCoachService,
-    adminApiToken
+    geminiCoachService
   } = options;
   const requiredSampleGames = Math.max(1, Math.floor(minSampleGames ?? 10));
   const router = Router();
-
-  const requireAdminToken = (req: Request): boolean => {
-    if (!adminApiToken) return true;
-    const headerToken = String(req.headers["x-admin-token"] ?? "");
-    return headerToken.length > 0 && headerToken === adminApiToken;
-  };
 
   router.get("/champions", async (req, res) => {
     try {
@@ -152,8 +130,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const lane = normalizeCoachLane(parseInput.data.lane);
       let primaryStats: MatchupStats | null = null;
       let partnerStats: MatchupStats | null = null;
-      let riotPrimaryStats: MatchupStats | null = null;
-      let riotPartnerStats: MatchupStats | null = null;
+      let primaryStatsGames = 0;
+      let partnerStatsGames = 0;
       let externalPrimaryStats: MatchupStats | null = null;
       let externalPartnerStats: MatchupStats | null = null;
       let externalSourceMeta:
@@ -164,7 +142,6 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             httpStatus?: number;
           }
         | null = null;
-      let liveStatsWarning = "";
       let usedExternalProvider: string | null = null;
       const patch = parseInput.data.patch ?? currentPatch;
       const botlaneContexts =
@@ -177,65 +154,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
               enemySupport: parseInput.data.enemyChampionPartner
             }
           : undefined;
-      if (enableLiveStats && riotStatsService) {
-        try {
-          if (lane === "bot") {
-            const [adcStats, supportStats] = await Promise.all([
-              withTimeout(
-                riotStatsService.getMatchupStats({
-                  lane: "adc",
-                  playerChampion: parseInput.data.playerChampion,
-                  enemyChampion: parseInput.data.enemyChampion,
-                  patch,
-                  targetGames: requiredSampleGames
-                }),
-                8_000,
-                "Live Riot stats timed out."
-              ),
-              withTimeout(
-                riotStatsService.getMatchupStats({
-                  lane: "support",
-                  playerChampion: parseInput.data.playerChampionPartner ?? "",
-                  enemyChampion: parseInput.data.enemyChampionPartner ?? "",
-                  patch,
-                  targetGames: requiredSampleGames
-                }),
-                8_000,
-                "Live Riot stats timed out."
-              )
-            ]);
-            riotPrimaryStats = adcStats;
-            riotPartnerStats = supportStats;
-            primaryStats = riotPrimaryStats;
-            partnerStats = riotPartnerStats;
-          } else {
-            riotPrimaryStats = await withTimeout(
-              riotStatsService.getMatchupStats({
-                lane,
-                playerChampion: parseInput.data.playerChampion,
-                enemyChampion: parseInput.data.enemyChampion,
-                patch,
-                targetGames: requiredSampleGames
-              }),
-              8_000,
-              "Live Riot stats timed out."
-            );
-            primaryStats = riotPrimaryStats;
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Unknown live stats error";
-          if (message.includes("429")) {
-            liveStatsWarning = "Live Riot stats temporarily rate-limited; using fallback coaching output.";
-          } else if (message.includes("timed out")) {
-            liveStatsWarning = "Live Riot stats timed out; using fallback coaching output.";
-          } else {
-            liveStatsWarning = "Live Riot stats unavailable; using fallback coaching output.";
-          }
-        }
-      }
-
-      const riotSampleSize = (riotPrimaryStats?.games ?? 0) + (riotPartnerStats?.games ?? 0);
-      if (externalStatsProvider && riotSampleSize < requiredSampleGames) {
+      const riotSampleSize = 0;
+      if (externalStatsProvider) {
         try {
           if (lane === "bot") {
             const [externalAdc, externalSupport] = await Promise.all([
@@ -262,14 +182,16 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             ]);
             const adcResult = externalAdc.result;
             const supportResult = externalSupport.result;
-            if (adcResult?.stats && (primaryStats?.games ?? 0) < adcResult.stats.games) {
+            if (adcResult?.stats && primaryStatsGames < adcResult.stats.games) {
               externalPrimaryStats = adcResult.stats;
               primaryStats = adcResult.stats;
+              primaryStatsGames = adcResult.stats.games;
               usedExternalProvider = adcResult.provider;
             }
-            if (supportResult?.stats && (partnerStats?.games ?? 0) < supportResult.stats.games) {
+            if (supportResult?.stats && partnerStatsGames < supportResult.stats.games) {
               externalPartnerStats = supportResult.stats;
               partnerStats = supportResult.stats;
+              partnerStatsGames = supportResult.stats.games;
               usedExternalProvider = supportResult.provider;
             }
             const preferredOutcome =
@@ -299,9 +221,10 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
               httpStatus: externalStats.httpStatus
             };
             const externalResult = externalStats.result;
-            if (externalResult?.stats && (primaryStats?.games ?? 0) < externalResult.stats.games) {
+            if (externalResult?.stats && primaryStatsGames < externalResult.stats.games) {
               externalPrimaryStats = externalResult.stats;
               primaryStats = externalResult.stats;
+              primaryStatsGames = externalResult.stats.games;
               usedExternalProvider = externalResult.provider;
             }
           }
@@ -317,7 +240,6 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const currentSampleSize = (primaryStats?.games ?? 0) + (partnerStats?.games ?? 0);
       const externalSampleSize = (externalPrimaryStats?.games ?? 0) + (externalPartnerStats?.games ?? 0);
       const hasEnoughSample = currentSampleSize >= requiredSampleGames;
-      const shouldQueueCollection = enableLiveStats && riotSampleSize < requiredSampleGames;
       const statsForCoaching = lane === "bot" ? combineBotStats(primaryStats, partnerStats) : primaryStats;
       const partnerStatsForCoaching = lane === "bot" ? null : partnerStats;
 
@@ -341,12 +263,9 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           botlaneContexts
         }
       );
-      if (liveStatsWarning) {
-        coaching.meta.warnings = [clampWarning(liveStatsWarning), ...coaching.meta.warnings];
-      }
       if (usedExternalProvider) {
         coaching.meta.warnings = [
-          clampWarning(`Using fast provisional stats from ${usedExternalProvider} while Riot sample backfill continues.`),
+          clampWarning(`Using matchup stats from ${usedExternalProvider}.`),
           ...coaching.meta.warnings
         ];
       } else if (externalSourceMeta && externalSourceMeta.status !== "success" && externalSourceMeta.status !== "cache_hit") {
@@ -357,36 +276,11 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           ...coaching.meta.warnings
         ];
       }
-      if (shouldQueueCollection && missingPairBackfillService) {
-        const queuedPrimary = missingPairBackfillService.enqueue({
-          patch,
-          lane: lane === "bot" ? "adc" : lane,
-          playerChampion: parseInput.data.playerChampion,
-          enemyChampion: parseInput.data.enemyChampion,
-          targetGames: requiredSampleGames
-        });
-        const queuedPartner =
-          lane === "bot" && parseInput.data.playerChampionPartner && parseInput.data.enemyChampionPartner
-            ? missingPairBackfillService.enqueue({
-                patch,
-                lane: "support",
-                playerChampion: parseInput.data.playerChampionPartner,
-                enemyChampion: parseInput.data.enemyChampionPartner,
-                targetGames: requiredSampleGames
-              })
-            : { queued: false };
-        if (queuedPrimary.queued || queuedPartner.queued || !hasEnoughSample) {
-          coaching.meta.warnings = [
-            clampWarning(
-              !hasEnoughSample
-                ? `Collecting more games (${currentSampleSize}/${requiredSampleGames}); provisional data may be shown.`
-                : lane === "bot"
-                  ? "Queued background backfill for ADC/support matchup pairs."
-                  : "Queued background backfill for this matchup pair."
-            ),
-            ...coaching.meta.warnings
-          ];
-        }
+      if (!hasEnoughSample) {
+        coaching.meta.warnings = [
+          clampWarning(`Collecting more games (${currentSampleSize}/${requiredSampleGames}); provisional data may be shown.`),
+          ...coaching.meta.warnings
+        ];
       }
       coaching.meta.warnings = coaching.meta.warnings.map(clampWarning);
       const parseOutput = coachMatchupResponseSchema.safeParse(coaching);
@@ -407,93 +301,10 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
     }
   });
 
-  router.get("/admin/riot/matchup-stats", async (req, res) => {
-    if (!enableLiveStats || !riotStatsService) {
-      return res.status(503).json({
-        error: "Live Riot stats are disabled. Set RIOT_ENABLE_LIVE_STATS=true and RIOT_API_KEY."
-      });
-    }
-
-    const playerChampion = normalizeChampionName(String(req.query.playerChampion ?? ""));
-    const enemyChampion = normalizeChampionName(String(req.query.enemyChampion ?? ""));
-    const lane = normalizeLane(req.query.lane);
-    const patch = String(req.query.patch ?? currentPatch);
-
-    if (!playerChampion || !enemyChampion) {
-      return res.status(400).json({
-        error: "playerChampion and enemyChampion query params are required."
-      });
-    }
-
-    try {
-      const stats = await riotStatsService.getMatchupStats({
-        lane,
-        playerChampion,
-        enemyChampion,
-        patch
-      });
-      return res.json({
-        matchup: { playerChampion, enemyChampion, patch, lane },
-        stats
-      });
-    } catch (error) {
-      return res.status(500).json({
-        error: "Failed to fetch Riot matchup stats.",
-        message: error instanceof Error ? error.message : "Unknown error"
-      });
-    }
-  });
-
-  router.post("/admin/precompute-cache", async (req, res) => {
-    if (!requireAdminToken(req)) {
-      return res.status(401).json({ error: "Unauthorized admin request." });
-    }
-    if (!enableLiveStats || !riotPrecomputeService) {
-      return res.status(503).json({
-        error: "Live Riot stats are disabled. Set RIOT_ENABLE_LIVE_STATS=true and RIOT_API_KEY."
-      });
-    }
-
-    const parseInteger = (value: unknown, fallback: number): number => {
-      const num = Number(value);
-      return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
-    };
-
-    const patch = String(req.body?.patch ?? currentPatch);
-    const lanesInput = Array.isArray(req.body?.lanes) ? (req.body.lanes as unknown[]) : undefined;
-    const lanes = lanesInput
-      ? lanesInput.map((lane) => normalizeLane(lane)).filter((lane, idx, arr) => arr.indexOf(lane) === idx)
-      : [...SUPPORTED_LANES];
-    const maxTrackedPlayers = parseInteger(req.body?.maxTrackedPlayers, 30);
-    const matchesPerPlayer = parseInteger(req.body?.matchesPerPlayer, 8);
-    const maxUniqueMatches = parseInteger(req.body?.maxUniqueMatches, 300);
-    const concurrency = parseInteger(req.body?.concurrency, 3);
-
-    try {
-      const summary = await riotPrecomputeService.precomputeAll({
-        patch,
-        lanes,
-        maxTrackedPlayers,
-        matchesPerPlayer,
-        maxUniqueMatches,
-        concurrency
-      });
-      return res.json({
-        ok: true,
-        summary
-      });
-    } catch (error) {
-      return res.status(500).json({
-        error: "Failed to precompute matchup cache.",
-        message: error instanceof Error ? error.message : "Unknown error"
-      });
-    }
-  });
-
   router.get("/admin/cache-status", async (req, res) => {
-    if (!enableLiveStats || !statsRepository) {
+    if (!statsRepository) {
       return res.status(503).json({
-        error: "Live Riot stats are disabled. Set RIOT_ENABLE_LIVE_STATS=true and RIOT_API_KEY."
+        error: "Stats repository is unavailable."
       });
     }
 
@@ -551,9 +362,9 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
   });
 
   router.get("/admin/cache-status-by-lane", async (req, res) => {
-    if (!enableLiveStats || !statsRepository) {
+    if (!statsRepository) {
       return res.status(503).json({
-        error: "Live Riot stats are disabled. Set RIOT_ENABLE_LIVE_STATS=true and RIOT_API_KEY."
+        error: "Stats repository is unavailable."
       });
     }
 
@@ -596,9 +407,9 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
   });
 
   router.get("/admin/cached-pairs", async (req, res) => {
-    if (!enableLiveStats || !statsRepository) {
+    if (!statsRepository) {
       return res.status(503).json({
-        error: "Live Riot stats are disabled. Set RIOT_ENABLE_LIVE_STATS=true and RIOT_API_KEY."
+        error: "Stats repository is unavailable."
       });
     }
 
@@ -659,73 +470,6 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         message: error instanceof Error ? error.message : "Failed to check Gemini status."
       });
     }
-  });
-
-  router.get("/admin/riot-key-status", async (_req, res) => {
-    if (!enableLiveStats || !riotApiClient) {
-      return res.json({
-        configured: false,
-        valid: false,
-        expired: false,
-        message: "Live Riot stats are disabled or RIOT_API_KEY is missing.",
-        checkedAt: new Date().toISOString()
-      });
-    }
-
-    try {
-      const status = await riotApiClient.getApiKeyStatus();
-      return res.json(status);
-    } catch (error) {
-      return res.status(500).json({
-        configured: true,
-        valid: false,
-        expired: false,
-        message: error instanceof Error ? error.message : "Failed to check Riot API key status.",
-        checkedAt: new Date().toISOString()
-      });
-    }
-  });
-
-  router.get("/admin/backfill-status", (_req, res) => {
-    if (!missingPairBackfillService) {
-      return res.json({
-        enabled: false,
-        queueDepth: 0,
-        processing: false,
-        currentKey: null
-      });
-    }
-    return res.json(missingPairBackfillService.getStatus());
-  });
-
-  router.get("/matchup-collection-status", (req, res) => {
-    if (!missingPairBackfillService) {
-      return res.json({
-        enabled: false,
-        snapshot: null
-      });
-    }
-
-    const playerChampion = normalizeChampionName(String(req.query.playerChampion ?? ""));
-    const enemyChampion = normalizeChampionName(String(req.query.enemyChampion ?? ""));
-    const patch = String(req.query.patch ?? currentPatch);
-    const lane = normalizeLane(req.query.lane);
-
-    if (!playerChampion || !enemyChampion) {
-      return res.status(400).json({
-        error: "playerChampion and enemyChampion query params are required."
-      });
-    }
-
-    return res.json({
-      enabled: true,
-      snapshot: missingPairBackfillService.getCollectionStatus({
-        patch,
-        lane,
-        playerChampion,
-        enemyChampion
-      })
-    });
   });
 
   return router;

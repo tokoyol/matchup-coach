@@ -16,7 +16,6 @@ const envSchema = z.object({
   RIOT_MAX_RETRIES: z.coerce.number().int().nonnegative().default(2),
   RIOT_RETRY_BASE_MS: z.coerce.number().int().positive().default(800),
   RIOT_RATE_LIMIT_COOLDOWN_SECONDS: z.coerce.number().int().positive().default(45),
-  RIOT_ENABLE_LIVE_STATS: z.enum(["true", "false"]).optional().default("false").transform((v) => v === "true"),
   EXTERNAL_STATS_PROVIDER: z.enum(["none", "lolalytics"]).default("none"),
   EXTERNAL_STATS_TIMEOUT_MS: z.coerce.number().int().positive().default(3500),
   GEMINI_API_KEY: z.string().min(10).optional(),
@@ -26,24 +25,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().url().optional(),
   STATS_DB_PATH: z.string().min(1).default("./data/matchup-coach.db"),
   STATS_CACHE_TTL_MINUTES: z.coerce.number().int().positive().default(60),
-  PRECOMPUTE_NIGHTLY_ENABLED: z
-    .enum(["true", "false"])
-    .optional()
-    .default("false")
-    .transform((v) => v === "true"),
-  PRECOMPUTE_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(3),
-  PRECOMPUTE_MAX_TRACKED_PLAYERS: z.coerce.number().int().positive().default(30),
-  PRECOMPUTE_MATCHES_PER_PLAYER: z.coerce.number().int().positive().default(8),
-  PRECOMPUTE_MAX_UNIQUE_MATCHES: z.coerce.number().int().positive().default(300),
-  PRECOMPUTE_CONCURRENCY: z.coerce.number().int().positive().default(3),
-  BACKFILL_ON_MISS_ENABLED: z.enum(["true", "false"]).optional().default("true").transform((v) => v === "true"),
-  BACKFILL_MAX_QUEUE_SIZE: z.coerce.number().int().positive().default(100),
-  BACKFILL_COOLDOWN_MINUTES: z.coerce.number().int().positive().default(20),
-  BACKFILL_MAX_TRACKED_PLAYERS: z.coerce.number().int().positive().default(18),
-  BACKFILL_MATCHES_PER_PLAYER: z.coerce.number().int().positive().default(6),
-  BACKFILL_MAX_UNIQUE_MATCHES: z.coerce.number().int().positive().default(700),
-  MATCHUP_MIN_SAMPLE_GAMES: z.coerce.number().int().positive().default(10),
-  ADMIN_API_TOKEN: z.string().min(12).optional()
+  MATCHUP_MIN_SAMPLE_GAMES: z.coerce.number().int().positive().default(10)
 });
 
 const parsed = envSchema.safeParse(process.env);
