@@ -31,6 +31,18 @@ const geminiAdviceSchema = z.object({
 
 type GeminiAdviceRaw = z.infer<typeof geminiAdviceSchema>;
 
+const botEnemySectionSchema = z.object({
+  threatPattern: z.string().min(1).max(280),
+  spacingRule: z.string().min(1).max(260),
+  punishWindow: z.string().min(1).max(260),
+  commonTrap: z.string().min(1).max(260)
+});
+
+const geminiBotEnemyAdviceSchema = z.object({
+  vsEnemyAdc: botEnemySectionSchema,
+  vsEnemySupport: botEnemySectionSchema
+});
+
 export interface GeminiAdvice {
   earlyGamePlan: string;
   level1to3Rules: string[];
@@ -45,6 +57,22 @@ export interface GeminiAdvice {
     shardsNote: string;
   };
   commonMistakes: string[];
+}
+
+export interface GeminiBotEnemyAdvice {
+  playerRole: "adc" | "support";
+  vsEnemyAdc: {
+    threatPattern: string;
+    spacingRule: string;
+    punishWindow: string;
+    commonTrap: string;
+  };
+  vsEnemySupport: {
+    threatPattern: string;
+    spacingRule: string;
+    punishWindow: string;
+    commonTrap: string;
+  };
 }
 
 interface GeminiCoachServiceOptions {
@@ -65,6 +93,7 @@ export interface GeminiStatus {
 
 export interface GeminiAdviceResult {
   advice: GeminiAdvice | null;
+  botlaneAdvice?: GeminiBotEnemyAdvice;
   failureReason?: string;
 }
 
@@ -225,6 +254,51 @@ function normalizeAdvice(input: GeminiAdviceRaw): GeminiAdvice {
   };
 }
 
+function normalizeBotEnemySection(input: z.infer<typeof botEnemySectionSchema>): z.infer<typeof botEnemySectionSchema> {
+  return {
+    threatPattern: clip(cleanLine(input.threatPattern), 240),
+    spacingRule: clip(cleanLine(input.spacingRule), 220),
+    punishWindow: clip(cleanLine(input.punishWindow), 220),
+    commonTrap: clip(cleanLine(input.commonTrap), 220)
+  };
+}
+
+function fallbackBotEnemyAdvice(playerRole: "adc" | "support"): GeminiBotEnemyAdvice {
+  const sharedAdc =
+    playerRole === "adc"
+      ? {
+          threatPattern: "Enemy ADC wins if they keep sustained auto uptime while your wave is thin.",
+          spacingRule: "Trade around last-hit moments and stay just outside their free auto range between minion kills.",
+          punishWindow: "Step in when enemy ADC uses a damage spell for wave clear or misses their poke cooldown.",
+          commonTrap: "Overchasing past your support position and losing return trade tempo."
+        }
+      : {
+          threatPattern: "Enemy ADC is dangerous when they can auto freely while you are disconnected from your ADC.",
+          spacingRule: "Hold lateral spacing with your ADC so you can peel or engage without splitting threat zones.",
+          punishWindow: "Pressure when enemy ADC uses a key farming cooldown and cannot match immediate retaliation.",
+          commonTrap: "Forcing an engage while your ADC is not in range to follow up."
+        };
+  const sharedSupport =
+    playerRole === "adc"
+      ? {
+          threatPattern: "Enemy support controls the lane through engage or poke cooldown timing.",
+          spacingRule: "Track support threat range first, then position for CS only when their key tool is down.",
+          punishWindow: "Punish after enemy support misses hook, CC, or primary poke sequence.",
+          commonTrap: "Walking up for CS before checking enemy support cooldown and angle."
+        }
+      : {
+          threatPattern: "Enemy support decides many lane starts through vision and cooldown control.",
+          spacingRule: "Mirror or shadow enemy support movement so your ADC is never isolated in trade windows.",
+          punishWindow: "Take space immediately after enemy support misses engage or uses CC defensively.",
+          commonTrap: "Roaming or warding on bad timers that leave your ADC exposed to 2v1 pressure."
+        };
+  return {
+    playerRole,
+    vsEnemyAdc: sharedAdc,
+    vsEnemySupport: sharedSupport
+  };
+}
+
 export class GeminiCoachService {
   private readonly apiKeys: string[];
 
@@ -361,6 +435,7 @@ export class GeminiCoachService {
     enemyChampion: string;
     playerChampionPartner?: string;
     enemyChampionPartner?: string;
+    playerRole?: "adc" | "support";
     lane: CoachLane;
     patch: string;
     difficulty: "easy" | "favored" | "even" | "not_favored" | "hard";
@@ -394,6 +469,7 @@ playerChampion=${input.playerChampion}
 enemyChampion=${input.enemyChampion}
 playerChampionPartner=${input.playerChampionPartner ?? "-"}
 enemyChampionPartner=${input.enemyChampionPartner ?? "-"}
+playerRole=${input.playerRole ?? "-"}
 lane=${input.lane}
 patch=${input.patch}
 difficulty=${input.difficulty}
@@ -450,22 +526,91 @@ partnerStats=${partnerStatsBlock}
 
         const jsonText = extractJsonObject(text);
         const parsedJson = tryLenientParse(jsonText);
-        if (!parsedJson) {
-          const normalized = normalizeFromPlainText(text);
-          if (normalized) return { advice: normalized };
-          lastFailure = "Gemini text was not parseable JSON.";
-          return { advice: null, failureReason: lastFailure };
-        }
-        const parsedAdvice = geminiAdviceSchema.safeParse(parsedJson);
-        if (!parsedAdvice.success) {
-          const normalized = normalizeFromPlainText(text);
-          if (normalized) {
-            return { advice: normalized };
-          }
+        const normalized =
+          parsedJson && geminiAdviceSchema.safeParse(parsedJson).success
+            ? normalizeAdvice((parsedJson as GeminiAdviceRaw))
+            : normalizeFromPlainText(text);
+        if (!normalized) {
           lastFailure = "Gemini JSON did not match expected coaching schema.";
           return { advice: null, failureReason: lastFailure };
         }
-        return { advice: normalizeAdvice(parsedAdvice.data) };
+
+        const shouldGenerateBotAdvice =
+          input.lane === "bot" &&
+          Boolean(input.playerRole) &&
+          Boolean(input.playerChampionPartner) &&
+          Boolean(input.enemyChampionPartner);
+        if (!shouldGenerateBotAdvice) {
+          return { advice: normalized };
+        }
+
+        const botPrompt = `
+You are a League of Legends botlane coach for Iron-Gold.
+Perspective: playerRole=${input.playerRole}.
+Allied duo: ${input.playerChampion} + ${input.playerChampionPartner}
+Enemy duo: ${input.enemyChampion} + ${input.enemyChampionPartner}
+
+Return ONLY valid JSON with keys:
+vsEnemyAdc, vsEnemySupport
+
+Each key is an object with exactly:
+- threatPattern
+- spacingRule
+- punishWindow
+- commonTrap
+
+Write role-specific advice from the player's perspective.
+Keep each value practical and concise (1 sentence each).
+`.trim();
+        const botResponse = await this.fetchWithTimeout(
+          url,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: botPrompt }] }],
+              generationConfig: {
+                temperature: 0.2
+              }
+            })
+          },
+          10_000
+        );
+        if (!botResponse.ok) {
+          return {
+            advice: normalized,
+            botlaneAdvice: fallbackBotEnemyAdvice(input.playerRole as "adc" | "support")
+          };
+        }
+        const botPayload = (await botResponse.json()) as Record<string, unknown>;
+        const botCandidates = (botPayload.candidates ?? []) as Array<Record<string, unknown>>;
+        const botText = botCandidates?.[0]?.content
+          ? (((botCandidates[0].content as Record<string, unknown>).parts ?? []) as Array<Record<string, unknown>>)[0]
+              ?.text
+          : undefined;
+        if (typeof botText !== "string" || !botText.trim()) {
+          return {
+            advice: normalized,
+            botlaneAdvice: fallbackBotEnemyAdvice(input.playerRole as "adc" | "support")
+          };
+        }
+        const botJsonText = extractJsonObject(botText);
+        const botParsed = tryLenientParse(botJsonText);
+        const parsedBotAdvice = geminiBotEnemyAdviceSchema.safeParse(botParsed);
+        if (!parsedBotAdvice.success) {
+          return {
+            advice: normalized,
+            botlaneAdvice: fallbackBotEnemyAdvice(input.playerRole as "adc" | "support")
+          };
+        }
+        return {
+          advice: normalized,
+          botlaneAdvice: {
+            playerRole: input.playerRole as "adc" | "support",
+            vsEnemyAdc: normalizeBotEnemySection(parsedBotAdvice.data.vsEnemyAdc),
+            vsEnemySupport: normalizeBotEnemySection(parsedBotAdvice.data.vsEnemySupport)
+          }
+        };
       } catch (error) {
         lastFailure = error instanceof Error ? error.message : "Gemini request failed unexpectedly.";
       }

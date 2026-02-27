@@ -3,6 +3,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 type Difficulty = "easy" | "favored" | "even" | "not_favored" | "hard";
 type CoachLane = "top" | "jungle" | "mid" | "bot";
 type DataLane = "top" | "jungle" | "mid" | "adc" | "support";
+type BotPlayerRole = "adc" | "support";
 
 interface ChampionsResponse {
   lane: CoachLane | DataLane;
@@ -16,6 +17,7 @@ interface CoachResponse {
     enemyChampion: string;
     playerChampionPartner?: string;
     enemyChampionPartner?: string;
+    playerRole?: BotPlayerRole;
     lane: CoachLane;
     patch: string;
   };
@@ -33,6 +35,21 @@ interface CoachResponse {
     shardsNote: string;
   };
   commonMistakes: [string, string, string];
+  botlaneAdvice?: {
+    playerRole: BotPlayerRole;
+    vsEnemyAdc: {
+      threatPattern: string;
+      spacingRule: string;
+      punishWindow: string;
+      commonTrap: string;
+    };
+    vsEnemySupport: {
+      threatPattern: string;
+      spacingRule: string;
+      punishWindow: string;
+      commonTrap: string;
+    };
+  };
   meta: {
     generatedAt: string;
     dataConfidence: "low" | "medium" | "high";
@@ -105,6 +122,7 @@ export default function App() {
   const [enemyChampion, setEnemyChampion] = useState<string>("");
   const [playerChampionPartner, setPlayerChampionPartner] = useState<string>("");
   const [enemyChampionPartner, setEnemyChampionPartner] = useState<string>("");
+  const [playerRole, setPlayerRole] = useState<BotPlayerRole>("adc");
   const [result, setResult] = useState<CoachResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string>("");
@@ -200,9 +218,10 @@ export default function App() {
       (selectedLane !== "bot" ||
         (playerChampionPartner.length > 0 &&
           enemyChampionPartner.length > 0 &&
+          Boolean(playerRole) &&
           playerChampion !== playerChampionPartner &&
           enemyChampion !== enemyChampionPartner)),
-    [loading, playerChampion, enemyChampion, selectedLane, playerChampionPartner, enemyChampionPartner]
+    [loading, playerChampion, enemyChampion, selectedLane, playerChampionPartner, enemyChampionPartner, playerRole]
   );
 
   const requestCoaching = useCallback(async () => {
@@ -219,6 +238,7 @@ export default function App() {
           enemyChampion,
           ...(selectedLane === "bot"
             ? {
+                playerRole,
                 playerChampionPartner,
                 enemyChampionPartner
               }
@@ -239,6 +259,7 @@ export default function App() {
   }, [
     canSubmit,
     selectedLane,
+    playerRole,
     playerChampion,
     enemyChampion,
     playerChampionPartner,
@@ -284,7 +305,17 @@ export default function App() {
         </div>
 
         {selectedLane === "bot" ? (
-          <div className="botlane-grid">
+          <>
+            <div className="field-grid">
+              <label>
+                I am playing
+                <select value={playerRole} onChange={(e) => setPlayerRole(e.target.value as BotPlayerRole)}>
+                  <option value="adc">ADC</option>
+                  <option value="support">Support</option>
+                </select>
+              </label>
+            </div>
+            <div className="botlane-grid">
             <section className="card botlane-side">
               <h3>Ally Botlane</h3>
               <label>
@@ -331,7 +362,8 @@ export default function App() {
                 </select>
               </label>
             </section>
-          </div>
+            </div>
+          </>
         ) : (
           <div className="botlane-grid">
             <section className="card botlane-side">
@@ -432,9 +464,48 @@ export default function App() {
           </section>
 
           <section className="card">
-            <h2>Early Game Plan (0-5 min)</h2>
+            <h2>{result.matchup.lane === "bot" ? "Combined Duo Plan (0-5 min)" : "Early Game Plan (0-5 min)"}</h2>
             <p>{result.earlyGamePlan}</p>
           </section>
+
+          {result.matchup.lane === "bot" && result.botlaneAdvice ? (
+            <>
+              <section className="card">
+                <h2>How to play vs Enemy ADC</h2>
+                <ul>
+                  <li>
+                    <strong>Threat pattern:</strong> {result.botlaneAdvice.vsEnemyAdc.threatPattern}
+                  </li>
+                  <li>
+                    <strong>Spacing rule:</strong> {result.botlaneAdvice.vsEnemyAdc.spacingRule}
+                  </li>
+                  <li>
+                    <strong>Punish window:</strong> {result.botlaneAdvice.vsEnemyAdc.punishWindow}
+                  </li>
+                  <li>
+                    <strong>Common trap:</strong> {result.botlaneAdvice.vsEnemyAdc.commonTrap}
+                  </li>
+                </ul>
+              </section>
+              <section className="card">
+                <h2>How to play vs Enemy Support</h2>
+                <ul>
+                  <li>
+                    <strong>Threat pattern:</strong> {result.botlaneAdvice.vsEnemySupport.threatPattern}
+                  </li>
+                  <li>
+                    <strong>Spacing rule:</strong> {result.botlaneAdvice.vsEnemySupport.spacingRule}
+                  </li>
+                  <li>
+                    <strong>Punish window:</strong> {result.botlaneAdvice.vsEnemySupport.punishWindow}
+                  </li>
+                  <li>
+                    <strong>Common trap:</strong> {result.botlaneAdvice.vsEnemySupport.commonTrap}
+                  </li>
+                </ul>
+              </section>
+            </>
+          ) : null}
 
           <section className="card">
             <h2>Level 1-3 Rules</h2>

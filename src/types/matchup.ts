@@ -1,6 +1,7 @@
 import type { CoachLane } from "../data/champions.js";
 
 export type MatchupDifficulty = "easy" | "favored" | "even" | "not_favored" | "hard";
+export type BotPlayerRole = "adc" | "support";
 
 export type AllInTiming =
   | "level_2"
@@ -14,6 +15,7 @@ export interface CoachMatchupRequest {
   enemyChampion: string;
   playerChampionPartner?: string;
   enemyChampionPartner?: string;
+  playerRole?: BotPlayerRole;
   lane?: CoachLane;
   patch?: string;
   language?: "en";
@@ -37,12 +39,20 @@ export interface RuneAdjustments {
   shardsNote: string;
 }
 
+export interface BotEnemyAdvice {
+  threatPattern: string;
+  spacingRule: string;
+  punishWindow: string;
+  commonTrap: string;
+}
+
 export interface CoachMatchupResponse {
   matchup: {
     playerChampion: string;
     enemyChampion: string;
     playerChampionPartner?: string;
     enemyChampionPartner?: string;
+    playerRole?: BotPlayerRole;
     lane: CoachLane;
     patch: string;
   };
@@ -52,6 +62,11 @@ export interface CoachMatchupResponse {
   allInWindows: AllInWindow[];
   runeAdjustments: RuneAdjustments;
   commonMistakes: [string, string, string];
+  botlaneAdvice?: {
+    playerRole: BotPlayerRole;
+    vsEnemyAdc: BotEnemyAdvice;
+    vsEnemySupport: BotEnemyAdvice;
+  };
   meta: {
     generatedAt: string;
     dataConfidence: "low" | "medium" | "high";

@@ -7,6 +7,7 @@ export const coachMatchupRequestSchema = z
     enemyChampion: z.string().min(2).max(40),
     playerChampionPartner: z.string().min(2).max(40).optional(),
     enemyChampionPartner: z.string().min(2).max(40).optional(),
+    playerRole: z.enum(["adc", "support"]).optional(),
     lane: z.enum(SUPPORTED_COACH_LANES).optional(),
     patch: z
       .string()
@@ -30,6 +31,13 @@ export const coachMatchupRequestSchema = z
   })
   .refine((data) => {
     if (data.lane !== "bot") return true;
+    return Boolean(data.playerRole);
+  }, {
+    message: "Bot lane requires playerRole (adc or support).",
+    path: ["playerRole"]
+  })
+  .refine((data) => {
+    if (data.lane !== "bot") return true;
     return (
       data.playerChampion !== data.playerChampionPartner && data.enemyChampion !== data.enemyChampionPartner
     );
@@ -44,6 +52,13 @@ const allInWindowSchema = z.object({
   action: z.string().min(4).max(220)
 });
 
+const botEnemyAdviceSchema = z.object({
+  threatPattern: z.string().min(10).max(240),
+  spacingRule: z.string().min(10).max(220),
+  punishWindow: z.string().min(10).max(220),
+  commonTrap: z.string().min(10).max(220)
+});
+
 export const coachMatchupResponseSchema = z
   .object({
     matchup: z.object({
@@ -51,6 +66,7 @@ export const coachMatchupResponseSchema = z
       enemyChampion: z.string(),
       playerChampionPartner: z.string().optional(),
       enemyChampionPartner: z.string().optional(),
+      playerRole: z.enum(["adc", "support"]).optional(),
       lane: z.enum(SUPPORTED_COACH_LANES),
       patch: z.string()
     }),
@@ -74,6 +90,13 @@ export const coachMatchupResponseSchema = z
       z.string().min(10).max(180),
       z.string().min(10).max(180)
     ]),
+    botlaneAdvice: z
+      .object({
+        playerRole: z.enum(["adc", "support"]),
+        vsEnemyAdc: botEnemyAdviceSchema,
+        vsEnemySupport: botEnemyAdviceSchema
+      })
+      .optional(),
     meta: z.object({
       generatedAt: z.iso.datetime(),
       dataConfidence: z.enum(["low", "medium", "high"]),

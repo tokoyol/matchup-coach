@@ -190,6 +190,53 @@ function sanitizeAdviceMechanics(
   };
 }
 
+function fallbackBotlaneAdvice(
+  input: Pick<
+    CoachMatchupRequestInput,
+    "playerChampion" | "enemyChampion" | "playerChampionPartner" | "enemyChampionPartner" | "playerRole"
+  >
+): NonNullable<CoachMatchupResponseOutput["botlaneAdvice"]> {
+  const role = input.playerRole === "support" ? "support" : "adc";
+  const allySupport = input.playerChampionPartner ?? "your support";
+  const enemySupport = input.enemyChampionPartner ?? "enemy support";
+
+  const vsEnemyAdc =
+    role === "adc"
+      ? {
+          threatPattern: `${input.enemyChampion} is strongest when they get uninterrupted autos during your CS timing.`,
+          spacingRule: `Hold spacing so ${input.enemyChampion} cannot auto for free while you contest last hits.`,
+          punishWindow: `Trade when ${input.enemyChampion} uses a damage cooldown on the wave or misses poke.`,
+          commonTrap: `Overextending past ${allySupport} and taking isolated 1v1 trades.`
+        }
+      : {
+          threatPattern: `${input.enemyChampion} spikes when they can focus your ADC without immediate peel.`,
+          spacingRule: `Shadow your ADC and keep a matching angle so ${input.enemyChampion} cannot free-hit.`,
+          punishWindow: `Step up when ${input.enemyChampion} burns a farm cooldown and cannot return damage quickly.`,
+          commonTrap: "Engaging while your ADC is still out of range to follow."
+        };
+
+  const vsEnemySupport =
+    role === "adc"
+      ? {
+          threatPattern: `${enemySupport} controls lane starts through engage and crowd-control cooldowns.`,
+          spacingRule: `Track ${enemySupport} position first, then walk up for farm when key threat is down.`,
+          punishWindow: `Trade right after ${enemySupport} misses engage or uses primary poke defensively.`,
+          commonTrap: `Walking into ${enemySupport} range without minion cover or ally support position.`
+        }
+      : {
+          threatPattern: `${enemySupport} dictates tempo with vision control and engage timing.`,
+          spacingRule: `Mirror ${enemySupport} movement to keep your ADC protected and contest lane space.`,
+          punishWindow: `Take lane space when ${enemySupport} misses engage and has no immediate re-threat.`,
+          commonTrap: `Roaming on a bad timer and leaving your ADC exposed into ${input.enemyChampion}.`
+        };
+
+  return {
+    playerRole: role,
+    vsEnemyAdc,
+    vsEnemySupport
+  };
+}
+
 export async function generateMatchupCoaching(
   input: CoachMatchupRequestInput,
   currentPatch: string,
@@ -209,6 +256,13 @@ export async function generateMatchupCoaching(
       failureReason?: string;
       httpStatus?: number;
     } | null;
+    botlaneContexts?: {
+      playerRole: "adc" | "support";
+      allyAdc: string;
+      allySupport: string;
+      enemyAdc: string;
+      enemySupport: string;
+    };
   }
 ): Promise<CoachMatchupResponseOutput> {
   const patch = input.patch ?? currentPatch;
@@ -254,6 +308,16 @@ export async function generateMatchupCoaching(
     CoachMatchupResponseOutput,
     "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
   > = fallbackAdvice;
+  let botlaneAdvice =
+    lane === "bot" && input.playerRole
+      ? fallbackBotlaneAdvice({
+          playerChampion: options?.botlaneContexts?.allyAdc ?? input.playerChampion,
+          enemyChampion: options?.botlaneContexts?.enemyAdc ?? input.enemyChampion,
+          playerChampionPartner: options?.botlaneContexts?.allySupport ?? input.playerChampionPartner,
+          enemyChampionPartner: options?.botlaneContexts?.enemySupport ?? input.enemyChampionPartner,
+          playerRole: options?.botlaneContexts?.playerRole ?? input.playerRole
+        })
+      : undefined;
   let geminiFailureReason = "";
   if (geminiCoachService) {
     const geminiResult = await geminiCoachService.generateAdvice({
@@ -261,6 +325,7 @@ export async function generateMatchupCoaching(
       enemyChampion: input.enemyChampion,
       playerChampionPartner: input.playerChampionPartner,
       enemyChampionPartner: input.enemyChampionPartner,
+      playerRole: input.playerRole,
       lane,
       patch,
       difficulty,
@@ -278,6 +343,9 @@ export async function generateMatchupCoaching(
       };
       generatedWithGemini = true;
     }
+    if (geminiResult.botlaneAdvice && lane === "bot") {
+      botlaneAdvice = geminiResult.botlaneAdvice;
+    }
   }
 
   advice = applyMatchupPriors(input, advice);
@@ -289,6 +357,7 @@ export async function generateMatchupCoaching(
       enemyChampion: input.enemyChampion,
       playerChampionPartner: input.playerChampionPartner,
       enemyChampionPartner: input.enemyChampionPartner,
+      playerRole: input.playerRole,
       lane,
       patch
     },
@@ -298,6 +367,7 @@ export async function generateMatchupCoaching(
     allInWindows: advice.allInWindows,
     runeAdjustments: advice.runeAdjustments,
     commonMistakes: advice.commonMistakes,
+    botlaneAdvice,
     meta: {
       generatedAt: new Date().toISOString(),
       dataConfidence:

@@ -132,6 +132,7 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       ...req.body,
       playerChampion: normalizeChampionName(req.body?.playerChampion ?? ""),
       enemyChampion: normalizeChampionName(req.body?.enemyChampion ?? ""),
+      playerRole: typeof req.body?.playerRole === "string" ? String(req.body.playerRole).trim().toLowerCase() : undefined,
       playerChampionPartner: req.body?.playerChampionPartner
         ? normalizeChampionName(req.body.playerChampionPartner)
         : undefined,
@@ -166,6 +167,16 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       let liveStatsWarning = "";
       let usedExternalProvider: string | null = null;
       const patch = parseInput.data.patch ?? currentPatch;
+      const botlaneContexts =
+        lane === "bot" && parseInput.data.playerChampionPartner && parseInput.data.enemyChampionPartner && parseInput.data.playerRole
+          ? {
+              playerRole: parseInput.data.playerRole,
+              allyAdc: parseInput.data.playerChampion,
+              allySupport: parseInput.data.playerChampionPartner,
+              enemyAdc: parseInput.data.enemyChampion,
+              enemySupport: parseInput.data.enemyChampionPartner
+            }
+          : undefined;
       if (enableLiveStats && riotStatsService) {
         try {
           if (lane === "bot") {
@@ -326,7 +337,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             externalGames: externalSampleSize,
             effectiveGames: currentSampleSize
           },
-          externalSource: externalSourceMeta
+          externalSource: externalSourceMeta,
+          botlaneContexts
         }
       );
       if (liveStatsWarning) {
