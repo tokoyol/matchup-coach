@@ -26,14 +26,6 @@ export type SupportedLane = (typeof SUPPORTED_LANES)[number];
 export const SUPPORTED_COACH_LANES = ["top", "jungle", "mid", "bot"] as const;
 export type CoachLane = (typeof SUPPORTED_COACH_LANES)[number];
 
-export const RIOT_TEAM_POSITION_BY_LANE: Record<SupportedLane, string> = {
-  top: "TOP",
-  jungle: "JUNGLE",
-  mid: "MIDDLE",
-  adc: "BOTTOM",
-  support: "UTILITY"
-};
-
 export const CHAMPION_TAGS: Record<string, string[]> = {
   Aatrox: ["melee", "sustain", "skillshot"],
   Camille: ["melee", "scaling", "engage"],

@@ -392,7 +392,7 @@ export async function generateMatchupCoaching(
       },
       warnings: hasStats
         ? []
-        : ["Using fallback coaching template until enough Riot matchup samples are available."]
+        : ["Using fallback coaching template until enough matchup samples are available."]
     }
   };
 

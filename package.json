@@ -8,7 +8,6 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "scrape:matchups": "tsx src/scripts/scrapeMatchups.ts",
     "scrape:lolalytics": "tsx src/scripts/scrapeLolalyticsToSupabase.ts",
     "scrape:lolalytics:all": "tsx src/scripts/scrapeLolalyticsToSupabase.ts --lanes top,jungle,mid,adc,support"
   },

@@ -7,15 +7,6 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().default("*"),
   CURRENT_PATCH: z.string().regex(/^[0-9]{2}\.[0-9]{1,2}$/).default("26.4"),
-  RIOT_API_KEY: z.string().min(10).optional(),
-  RIOT_PLATFORM_ROUTE: z
-    .enum(["br1", "eun1", "euw1", "jp1", "kr", "la1", "la2", "na1", "oc1", "tr1", "ru"])
-    .default("na1"),
-  RIOT_REGIONAL_ROUTE: z.enum(["americas", "asia", "europe", "sea"]).default("americas"),
-  RIOT_REQUEST_MIN_INTERVAL_MS: z.coerce.number().int().nonnegative().default(150),
-  RIOT_MAX_RETRIES: z.coerce.number().int().nonnegative().default(2),
-  RIOT_RETRY_BASE_MS: z.coerce.number().int().positive().default(800),
-  RIOT_RATE_LIMIT_COOLDOWN_SECONDS: z.coerce.number().int().positive().default(45),
   EXTERNAL_STATS_PROVIDER: z.enum(["none", "lolalytics"]).default("none"),
   EXTERNAL_STATS_TIMEOUT_MS: z.coerce.number().int().positive().default(3500),
   GEMINI_API_KEY: z.string().min(10).optional(),

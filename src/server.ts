@@ -51,7 +51,6 @@ async function bootstrap(): Promise<void> {
         model: env.GEMINI_MODEL
       })
     : undefined;
-  // Riot live pulling is intentionally disabled for API requests.
   // Matchup responses are served from cached DB + external provider data.
   if (env.EXTERNAL_STATS_PROVIDER === "lolalytics") {
     externalStatsProvider = new LolalyticsScrapeProvider(env.EXTERNAL_STATS_TIMEOUT_MS);
