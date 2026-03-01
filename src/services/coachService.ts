@@ -3,6 +3,8 @@ import { CHAMPION_TAGS } from "../data/champions.js";
 import type { MatchupStats } from "../types/stats.js";
 import { GeminiCoachService } from "./geminiCoachService.js";
 
+type CoachLanguage = "en" | "ja";
+
 const KEYSTONE_NAMES: Record<number, string> = {
   8005: "Press the Attack",
   8008: "Lethal Tempo",
@@ -22,7 +24,10 @@ const KEYSTONE_NAMES: Record<number, string> = {
   8465: "Guardian"
 };
 
-function fallbackRuneAdjustments(stats?: MatchupStats | null): CoachMatchupResponseOutput["runeAdjustments"] {
+function fallbackRuneAdjustments(
+  stats?: MatchupStats | null,
+  language: CoachLanguage = "en"
+): CoachMatchupResponseOutput["runeAdjustments"] {
   const topRune = stats?.runeUsage?.[0];
   if (!stats || !topRune || stats.games <= 0) {
     return {
@@ -37,7 +42,10 @@ function fallbackRuneAdjustments(stats?: MatchupStats | null): CoachMatchupRespo
   return {
     keystone: {
       recommended: keystoneName,
-      reason: `Most common in this matchup sample (${pct} pick rate).`
+      reason:
+        language === "ja"
+          ? `このマッチアップで最も採用率が高いルーンです（採用率${pct}）。`
+          : `Most common in this matchup sample (${pct} pick rate).`
     },
     secondary: { tree: "", reason: "" },
     shardsNote: ""
@@ -194,40 +202,74 @@ function fallbackBotlaneAdvice(
   input: Pick<
     CoachMatchupRequestInput,
     "playerChampion" | "enemyChampion" | "playerChampionPartner" | "enemyChampionPartner" | "playerRole"
-  >
+  >,
+  language: CoachLanguage = "en"
 ): NonNullable<CoachMatchupResponseOutput["botlaneAdvice"]> {
+  const isJa = language === "ja";
   const role = input.playerRole === "support" ? "support" : "adc";
-  const allySupport = input.playerChampionPartner ?? "your support";
-  const enemySupport = input.enemyChampionPartner ?? "enemy support";
+  const allySupport = input.playerChampionPartner ?? (isJa ? "味方サポート" : "your support");
+  const enemySupport = input.enemyChampionPartner ?? (isJa ? "敵サポート" : "enemy support");
 
   const vsEnemyAdc =
     role === "adc"
       ? {
-          threatPattern: `${input.enemyChampion} is strongest when they get uninterrupted autos during your CS timing.`,
-          spacingRule: `Hold spacing so ${input.enemyChampion} cannot auto for free while you contest last hits.`,
-          punishWindow: `Trade when ${input.enemyChampion} uses a damage cooldown on the wave or misses poke.`,
-          commonTrap: `Overextending past ${allySupport} and taking isolated 1v1 trades.`
+          threatPattern: isJa
+            ? `${input.enemyChampion}は、あなたのCSタイミングで通常攻撃を継続できると最も強い。`
+            : `${input.enemyChampion} is strongest when they get uninterrupted autos during your CS timing.`,
+          spacingRule: isJa
+            ? `${input.enemyChampion}に無償AAを許さない間合いを保ってラストヒットを取る。`
+            : `Hold spacing so ${input.enemyChampion} cannot auto for free while you contest last hits.`,
+          punishWindow: isJa
+            ? `${input.enemyChampion}がウェーブに火力スキルを使うか、ポークを外した直後にトレードする。`
+            : `Trade when ${input.enemyChampion} uses a damage cooldown on the wave or misses poke.`,
+          commonTrap: isJa
+            ? `${allySupport}より前に出すぎて孤立した1v1トレードを受ける。`
+            : `Overextending past ${allySupport} and taking isolated 1v1 trades.`
         }
       : {
-          threatPattern: `${input.enemyChampion} spikes when they can focus your ADC without immediate peel.`,
-          spacingRule: `Shadow your ADC and keep a matching angle so ${input.enemyChampion} cannot free-hit.`,
-          punishWindow: `Step up when ${input.enemyChampion} burns a farm cooldown and cannot return damage quickly.`,
-          commonTrap: "Engaging while your ADC is still out of range to follow."
+          threatPattern: isJa
+            ? `${input.enemyChampion}は、味方ADCに即時ピールが届かない時に火力を出しやすい。`
+            : `${input.enemyChampion} spikes when they can focus your ADC without immediate peel.`,
+          spacingRule: isJa
+            ? `味方ADCと角度を合わせて位置取りし、${input.enemyChampion}の無償攻撃を防ぐ。`
+            : `Shadow your ADC and keep a matching angle so ${input.enemyChampion} cannot free-hit.`,
+          punishWindow: isJa
+            ? `${input.enemyChampion}がファーム用スキルを使った直後に前へ出て圧力をかける。`
+            : `Step up when ${input.enemyChampion} burns a farm cooldown and cannot return damage quickly.`,
+          commonTrap: isJa
+            ? "味方ADCが追従できない距離で先にエンゲージしてしまう。"
+            : "Engaging while your ADC is still out of range to follow."
         };
 
   const vsEnemySupport =
     role === "adc"
       ? {
-          threatPattern: `${enemySupport} controls lane starts through engage and crowd-control cooldowns.`,
-          spacingRule: `Track ${enemySupport} position first, then walk up for farm when key threat is down.`,
-          punishWindow: `Trade right after ${enemySupport} misses engage or uses primary poke defensively.`,
-          commonTrap: `Walking into ${enemySupport} range without minion cover or ally support position.`
+          threatPattern: isJa
+            ? `${enemySupport}はエンゲージとCCのCD管理でレーン開始を作る。`
+            : `${enemySupport} controls lane starts through engage and crowd-control cooldowns.`,
+          spacingRule: isJa
+            ? `${enemySupport}の位置を先に見て、主要スキル後にだけCSへ寄る。`
+            : `Track ${enemySupport} position first, then walk up for farm when key threat is down.`,
+          punishWindow: isJa
+            ? `${enemySupport}がエンゲージを外すか、主力ポークを防御に使った直後にトレードする。`
+            : `Trade right after ${enemySupport} misses engage or uses primary poke defensively.`,
+          commonTrap: isJa
+            ? `${enemySupport}の射程に、ミニオンカバーや味方サポート位置確認なしで入る。`
+            : `Walking into ${enemySupport} range without minion cover or ally support position.`
         }
       : {
-          threatPattern: `${enemySupport} dictates tempo with vision control and engage timing.`,
-          spacingRule: `Mirror ${enemySupport} movement to keep your ADC protected and contest lane space.`,
-          punishWindow: `Take lane space when ${enemySupport} misses engage and has no immediate re-threat.`,
-          commonTrap: `Roaming on a bad timer and leaving your ADC exposed into ${input.enemyChampion}.`
+          threatPattern: isJa
+            ? `${enemySupport}は視界管理とエンゲージタイミングでテンポを作る。`
+            : `${enemySupport} dictates tempo with vision control and engage timing.`,
+          spacingRule: isJa
+            ? `${enemySupport}の動きを合わせて追い、味方ADCを守りながらレーン空間を確保する。`
+            : `Mirror ${enemySupport} movement to keep your ADC protected and contest lane space.`,
+          punishWindow: isJa
+            ? `${enemySupport}がエンゲージを外し、再度仕掛けられない間に前へ出る。`
+            : `Take lane space when ${enemySupport} misses engage and has no immediate re-threat.`,
+          commonTrap: isJa
+            ? `悪いタイミングでロームして、味方ADCを${input.enemyChampion}相手に晒す。`
+            : `Roaming on a bad timer and leaving your ADC exposed into ${input.enemyChampion}.`
         };
 
   return {
@@ -265,6 +307,7 @@ export async function generateMatchupCoaching(
     };
   }
 ): Promise<CoachMatchupResponseOutput> {
+  const language: CoachLanguage = input.language === "ja" ? "ja" : "en";
   const patch = input.patch ?? currentPatch;
   const lane = input.lane ?? "top";
   const difficulty = estimateDifficulty(input.playerChampion, input.enemyChampion, stats);
@@ -277,30 +320,59 @@ export async function generateMatchupCoaching(
     "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
   > = {
     earlyGamePlan:
-      "Play for controlled wave states in the first 5 minutes. Keep your health high, avoid low-value extended trades, and trade only when the enemy uses a key cooldown or steps into your minion advantage.",
-    level1to3Rules: [
-      "Decide before lane if you can contest level 1 or should concede push.",
-      "Track level 2 race and only trade on your minion timing advantage.",
-      "Use short, repeatable trades unless enemy cooldowns are down."
-    ],
+      language === "ja"
+        ? "最初の5分はウェーブ管理を優先し、体力を維持して無理な長期トレードを避ける。敵の主要スキル使用後やミニオン有利の時だけトレードする。"
+        : "Play for controlled wave states in the first 5 minutes. Keep your health high, avoid low-value extended trades, and trade only when the enemy uses a key cooldown or steps into your minion advantage.",
+    level1to3Rules:
+      language === "ja"
+        ? [
+            "レーン前にレベル1を争うか、プッシュを譲るかを決める。",
+            "レベル2先行を意識し、ミニオン有利時のみトレードする。",
+            "敵の主要スキルが落ちている時だけ短い反復トレードを行う。"
+          ]
+        : [
+            "Decide before lane if you can contest level 1 or should concede push.",
+            "Track level 2 race and only trade on your minion timing advantage.",
+            "Use short, repeatable trades unless enemy cooldowns are down."
+          ],
     allInWindows: [
       {
         timing: "level_3" as const,
-        signal: "Enemy uses mobility or defensive cooldown for wave control.",
-        action: "Step up immediately for a commit trade, then disengage on your cooldown end."
+        signal:
+          language === "ja"
+            ? "敵がウェーブ管理に移動系または防御系スキルを使った。"
+            : "Enemy uses mobility or defensive cooldown for wave control.",
+        action:
+          language === "ja"
+            ? "すぐ前に出て仕掛け、こちらのCD終了に合わせて離脱する。"
+            : "Step up immediately for a commit trade, then disengage on your cooldown end."
       },
       {
         timing: "level_6" as const,
-        signal: "Enemy is below 70% HP and wave is closer to your side.",
-        action: "Use full combo and hold one key spell to secure the kill attempt."
+        signal:
+          language === "ja"
+            ? "敵HPが70%未満で、ウェーブがこちら側にある。"
+            : "Enemy is below 70% HP and wave is closer to your side.",
+        action:
+          language === "ja"
+            ? "フルコンボを使い、仕留め用に主要スキルを1つ温存する。"
+            : "Use full combo and hold one key spell to secure the kill attempt."
       }
     ],
-    runeAdjustments: fallbackRuneAdjustments(stats),
-    commonMistakes: [
-      "Trading into enemy cooldown advantage instead of waiting 3-5 seconds.",
-      "Pushing wave without vision and losing health before level 6.",
-      "Committing all-in without checking wave size and minion damage."
-    ] as [string, string, string]
+    runeAdjustments: fallbackRuneAdjustments(stats, language),
+    commonMistakes: (
+      language === "ja"
+        ? [
+            "敵スキル有利の時間に待たずにトレードしてしまう。",
+            "視界なしでウェーブを押し、レベル6前に体力を失う。",
+            "ウェーブ量やミニオンダメージ確認なしでオールインする。"
+          ]
+        : [
+            "Trading into enemy cooldown advantage instead of waiting 3-5 seconds.",
+            "Pushing wave without vision and losing health before level 6.",
+            "Committing all-in without checking wave size and minion damage."
+          ]
+    ) as [string, string, string]
   };
 
   let generatedWithGemini = false;
@@ -316,7 +388,7 @@ export async function generateMatchupCoaching(
           playerChampionPartner: options?.botlaneContexts?.allySupport ?? input.playerChampionPartner,
           enemyChampionPartner: options?.botlaneContexts?.enemySupport ?? input.enemyChampionPartner,
           playerRole: options?.botlaneContexts?.playerRole ?? input.playerRole
-        })
+        }, language)
       : undefined;
   let geminiFailureReason = "";
   if (geminiCoachService) {
@@ -332,7 +404,8 @@ export async function generateMatchupCoaching(
       playerTags,
       enemyTags,
       stats,
-      partnerStats
+      partnerStats,
+      language
     });
     const geminiAdvice = geminiResult.advice;
     geminiFailureReason = geminiResult.failureReason ?? "";
@@ -392,15 +465,23 @@ export async function generateMatchupCoaching(
       },
       warnings: hasStats
         ? []
-        : ["Using fallback coaching template until enough matchup samples are available."]
+        : [
+            language === "ja"
+              ? "十分なマッチアップサンプルが集まるまで、フォールバック用コーチングテンプレートを使用しています。"
+              : "Using fallback coaching template until enough matchup samples are available."
+          ]
     }
   };
 
   if (geminiCoachService && !generatedWithGemini) {
     response.meta.warnings = [
       geminiFailureReason
-        ? `Gemini advice unavailable: ${geminiFailureReason}`
-        : "Gemini advice unavailable for this request; using fallback coaching template.",
+        ? language === "ja"
+          ? `Geminiアドバイスを利用できません: ${geminiFailureReason}`
+          : `Gemini advice unavailable: ${geminiFailureReason}`
+        : language === "ja"
+          ? "このリクエストではGeminiアドバイスを利用できないため、フォールバック用コーチングテンプレートを使用しています。"
+          : "Gemini advice unavailable for this request; using fallback coaching template.",
       ...response.meta.warnings
     ];
   }

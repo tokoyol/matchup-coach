@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   SUPPORTED_LANES,
   SUPPORTED_TOP_CHAMPIONS,
+  championKey,
   normalizeChampionName,
   normalizeCoachLane,
   normalizeLane
@@ -53,6 +54,62 @@ function clampWarning(message: string): string {
   return trimmed.length <= 120 ? trimmed : `${trimmed.slice(0, 117).trim()}...`;
 }
 
+const CHAMPION_LOCALIZATION_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+
+let cachedJaChampionLocalization: {
+  fetchedAt: number;
+  patch: string;
+  names: Record<string, string>;
+} | null = null;
+
+interface DDragonChampionPayload {
+  data: Record<
+    string,
+    {
+      id: string;
+      name: string;
+    }
+  >;
+}
+
+async function fetchJaChampionLocalization(): Promise<{
+  patch: string;
+  names: Record<string, string>;
+}> {
+  const versionsResponse = await fetch("https://ddragon.leagueoflegends.com/api/versions.json");
+  if (!versionsResponse.ok) {
+    throw new Error(`Failed to fetch Data Dragon versions (HTTP ${versionsResponse.status}).`);
+  }
+  const versions = (await versionsResponse.json()) as string[];
+  const patch = versions[0];
+  if (!patch) {
+    throw new Error("Data Dragon returned an empty version list.");
+  }
+
+  const [enResponse, jaResponse] = await Promise.all([
+    fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/en_US/champion.json`),
+    fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/ja_JP/champion.json`)
+  ]);
+  if (!enResponse.ok || !jaResponse.ok) {
+    throw new Error(`Failed to fetch champion localization payloads (${enResponse.status}/${jaResponse.status}).`);
+  }
+
+  const [enData, jaData] = (await Promise.all([
+    enResponse.json() as Promise<DDragonChampionPayload>,
+    jaResponse.json() as Promise<DDragonChampionPayload>
+  ])) as [DDragonChampionPayload, DDragonChampionPayload];
+
+  const names: Record<string, string> = {};
+  Object.values(enData.data).forEach((enChampion) => {
+    const jaChampion = jaData.data[enChampion.id];
+    if (!jaChampion?.name) return;
+    names[championKey(enChampion.name)] = jaChampion.name;
+    names[championKey(enChampion.id)] = jaChampion.name;
+  });
+
+  return { patch, names };
+}
+
 interface CreateMatchupRouterOptions {
   currentPatch: string;
   minSampleGames?: number;
@@ -71,6 +128,47 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
   } = options;
   const requiredSampleGames = Math.max(1, Math.floor(minSampleGames ?? 10));
   const router = Router();
+
+  router.get("/champion-localization", async (req, res) => {
+    const language = String(req.query.language ?? "en").trim().toLowerCase();
+    if (language !== "ja") {
+      return res.json({
+        language: "en",
+        patch: currentPatch,
+        names: {}
+      });
+    }
+
+    const now = Date.now();
+    if (cachedJaChampionLocalization && now - cachedJaChampionLocalization.fetchedAt < CHAMPION_LOCALIZATION_CACHE_TTL_MS) {
+      return res.json({
+        language: "ja",
+        patch: cachedJaChampionLocalization.patch,
+        names: cachedJaChampionLocalization.names
+      });
+    }
+
+    try {
+      const localization = await fetchJaChampionLocalization();
+      cachedJaChampionLocalization = {
+        fetchedAt: now,
+        patch: localization.patch,
+        names: localization.names
+      };
+      return res.json({
+        language: "ja",
+        patch: localization.patch,
+        names: localization.names
+      });
+    } catch (error) {
+      return res.status(200).json({
+        language: "ja",
+        patch: currentPatch,
+        names: {},
+        warning: error instanceof Error ? error.message : "Failed to load champion localization."
+      });
+    }
+  });
 
   router.get("/champions", async (req, res) => {
     try {
@@ -92,10 +190,11 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         lane === "top"
           ? [...new Set([...SUPPORTED_TOP_CHAMPIONS, ...dynamicChampions])]
           : [...new Set(dynamicChampions)];
+      const normalizedChampions = [...new Set(champions.map((champion) => normalizeChampionName(champion)))];
       return res.json({
         lane,
         patch: currentPatch,
-        champions: champions.sort((a, b) => a.localeCompare(b))
+        champions: normalizedChampions.sort((a, b) => a.localeCompare(b))
       });
     } catch (error) {
       res.status(500).json({
@@ -127,6 +226,7 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
     }
 
     try {
+      const language = parseInput.data.language === "ja" ? "ja" : "en";
       const lane = normalizeCoachLane(parseInput.data.lane);
       let primaryStats: MatchupStats | null = null;
       let partnerStats: MatchupStats | null = null;
@@ -265,20 +365,30 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       );
       if (usedExternalProvider) {
         coaching.meta.warnings = [
-          clampWarning(`Using matchup stats from ${usedExternalProvider}.`),
+          clampWarning(
+            language === "ja"
+              ? `${usedExternalProvider}のマッチアップ統計を使用しています。`
+              : `Using matchup stats from ${usedExternalProvider}.`
+          ),
           ...coaching.meta.warnings
         ];
       } else if (externalSourceMeta && externalSourceMeta.status !== "success" && externalSourceMeta.status !== "cache_hit") {
         coaching.meta.warnings = [
           clampWarning(
-            `External source unavailable (${externalSourceMeta.status})${externalSourceMeta.failureReason ? `: ${externalSourceMeta.failureReason}` : ""}`
+            language === "ja"
+              ? `外部ソースを利用できません (${externalSourceMeta.status})${externalSourceMeta.failureReason ? `: ${externalSourceMeta.failureReason}` : ""}`
+              : `External source unavailable (${externalSourceMeta.status})${externalSourceMeta.failureReason ? `: ${externalSourceMeta.failureReason}` : ""}`
           ),
           ...coaching.meta.warnings
         ];
       }
       if (!hasEnoughSample) {
         coaching.meta.warnings = [
-          clampWarning(`Collecting more games (${currentSampleSize}/${requiredSampleGames}); provisional data may be shown.`),
+          clampWarning(
+            language === "ja"
+              ? `追加データ収集中 (${currentSampleSize}/${requiredSampleGames})。暫定データが表示される場合があります。`
+              : `Collecting more games (${currentSampleSize}/${requiredSampleGames}); provisional data may be shown.`
+          ),
           ...coaching.meta.warnings
         ];
       }

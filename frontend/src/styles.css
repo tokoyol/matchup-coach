@@ -23,6 +23,21 @@ body {
   font-size: 2rem;
 }
 
+.hero-row {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.language-select {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  color: #9fb0c2;
+  min-width: 160px;
+}
+
 .hero p {
   margin-top: 0.5rem;
   color: #9fb0c2;

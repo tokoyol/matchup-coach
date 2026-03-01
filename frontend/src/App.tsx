@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { COPY, detectInitialLanguage, formatTemplate, persistLanguage, type AppLanguage } from "./i18n";
 
 type Difficulty = "easy" | "favored" | "even" | "not_favored" | "hard";
 type CoachLane = "top" | "jungle" | "mid" | "bot";
@@ -9,6 +10,16 @@ interface ChampionsResponse {
   lane: CoachLane | DataLane;
   patch: string;
   champions: string[];
+}
+
+interface ChampionLocalizationResponse {
+  language: AppLanguage;
+  patch: string;
+  names: Record<string, string>;
+}
+
+function championNameKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 interface CoachResponse {
@@ -74,16 +85,28 @@ interface CoachResponse {
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 const AUTO_REFRESH_INTERVAL_MS = 6000;
 
-function difficultyLabel(difficulty: Difficulty): string {
-  if (difficulty === "easy") return "Easy";
-  if (difficulty === "favored") return "Favored";
-  if (difficulty === "not_favored") return "Not Favored";
-  if (difficulty === "hard") return "Hard";
-  return "Even";
+function difficultyLabel(difficulty: Difficulty, language: AppLanguage): string {
+  return COPY[language].enums.difficulty[difficulty];
 }
 
-function timingLabel(timing: CoachResponse["allInWindows"][number]["timing"]): string {
-  return timing.replaceAll("_", " ").replace(/\b\w/g, (s) => s.toUpperCase());
+function timingLabel(timing: CoachResponse["allInWindows"][number]["timing"], language: AppLanguage): string {
+  const timings: Record<AppLanguage, Record<CoachResponse["allInWindows"][number]["timing"], string>> = {
+    en: {
+      level_2: "Level 2",
+      level_3: "Level 3",
+      level_6: "Level 6",
+      first_item: "First Item",
+      enemy_misstep: "Enemy Misstep"
+    },
+    ja: {
+      level_2: "レベル2",
+      level_3: "レベル3",
+      level_6: "レベル6",
+      first_item: "1コア完成",
+      enemy_misstep: "敵のミス"
+    }
+  };
+  return timings[language][timing];
 }
 
 function isGenericAllInAction(action: string): boolean {
@@ -106,14 +129,15 @@ function hasRuneAdjustment(result: CoachResponse): boolean {
   );
 }
 
-function runeSourceLabel(result: CoachResponse): "From Gemini" | "From matchup stats" | "No adjustment" {
-  if (!hasRuneAdjustment(result)) return "No adjustment";
-  if (result.meta.source.rag) return "From Gemini";
-  if (result.meta.source.stats) return "From matchup stats";
-  return "No adjustment";
+function runeSourceLabel(result: CoachResponse, language: AppLanguage): string {
+  if (!hasRuneAdjustment(result)) return COPY[language].enums.runeSource.none;
+  if (result.meta.source.rag) return COPY[language].enums.runeSource.gemini;
+  if (result.meta.source.stats) return COPY[language].enums.runeSource.stats;
+  return COPY[language].enums.runeSource.none;
 }
 
 export default function App() {
+  const [language, setLanguage] = useState<AppLanguage>(() => detectInitialLanguage());
   const [primaryChampions, setPrimaryChampions] = useState<string[]>([]);
   const [partnerChampions, setPartnerChampions] = useState<string[]>([]);
   const [selectedLane, setSelectedLane] = useState<CoachLane>("top");
@@ -128,6 +152,44 @@ export default function App() {
   const [loadError, setLoadError] = useState<string>("");
   const [submitError, setSubmitError] = useState<string>("");
   const [showDifficultyHelp, setShowDifficultyHelp] = useState<boolean>(false);
+  const [jaChampionNames, setJaChampionNames] = useState<Record<string, string>>({});
+  const copy = COPY[language];
+
+  useEffect(() => {
+    persistLanguage(language);
+  }, [language]);
+
+  useEffect(() => {
+    if (language !== "ja") return;
+    if (Object.keys(jaChampionNames).length > 0) return;
+
+    let active = true;
+    const loadJapaneseChampionNames = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/champion-localization?language=ja`);
+        if (!response.ok) return;
+        const payload = (await response.json()) as ChampionLocalizationResponse;
+        const jaByChampionKey = payload.names ?? {};
+        if (!active) return;
+        setJaChampionNames(jaByChampionKey);
+      } catch {
+        // Keep English champion labels if external localization fetch fails.
+      }
+    };
+
+    void loadJapaneseChampionNames();
+    return () => {
+      active = false;
+    };
+  }, [language, jaChampionNames]);
+
+  const championLabel = useCallback(
+    (championName: string): string => {
+      if (language !== "ja") return championName;
+      return jaChampionNames[championNameKey(championName)] ?? championName;
+    },
+    [language, jaChampionNames]
+  );
 
   useEffect(() => {
     let active = true;
@@ -170,14 +232,14 @@ export default function App() {
         }
       } catch (error) {
         if (!active) return;
-        setLoadError(error instanceof Error ? error.message : "Failed to load champions.");
+        setLoadError(error instanceof Error ? error.message : copy.errors.loadChampions);
       }
     };
     loadChampions();
     return () => {
       active = false;
     };
-  }, [selectedLane]);
+  }, [selectedLane, copy.errors.loadChampions]);
 
   const enemyOptions = useMemo(() => {
     return primaryChampions.filter((champion) => champion !== playerChampion);
@@ -236,6 +298,7 @@ export default function App() {
           lane: selectedLane,
           playerChampion,
           enemyChampion,
+          language,
           ...(selectedLane === "bot"
             ? {
                 playerRole,
@@ -247,11 +310,16 @@ export default function App() {
       });
       const payload = await response.json();
       if (!response.ok) {
-        throw new Error(payload?.error ?? `Request failed (${response.status})`);
+        throw new Error(
+          payload?.error ??
+            formatTemplate(copy.errors.requestFailed, {
+              status: response.status
+            })
+        );
       }
       setResult(payload as CoachResponse);
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "Failed to fetch coaching output.");
+      setSubmitError(error instanceof Error ? error.message : copy.errors.fetchCoaching);
       setResult(null);
     } finally {
       setLoading(false);
@@ -263,7 +331,10 @@ export default function App() {
     playerChampion,
     enemyChampion,
     playerChampionPartner,
-    enemyChampionPartner
+    enemyChampionPartner,
+    language,
+    copy.errors.fetchCoaching,
+    copy.errors.requestFailed
   ]);
 
   const onSubmit = async (event: FormEvent) => {
@@ -287,19 +358,28 @@ export default function App() {
   return (
     <div className="page">
       <header className="hero">
-        <h1>Lane Matchup Coach</h1>
-        <p>Patch {patch}</p>
+        <div className="hero-row">
+          <h1>{copy.app.title}</h1>
+          <label className="language-select">
+            {copy.app.languageLabel}
+            <select value={language} onChange={(event) => setLanguage(event.target.value as AppLanguage)}>
+              <option value="en">{copy.app.english}</option>
+              <option value="ja">{copy.app.japanese}</option>
+            </select>
+          </label>
+        </div>
+        <p>{formatTemplate(copy.app.patch, { patch })}</p>
       </header>
 
       <form className="card form" onSubmit={onSubmit}>
         <div className="field-grid">
           <label>
-            Lane
+            {copy.form.lane}
             <select value={selectedLane} onChange={(e) => setSelectedLane(e.target.value as CoachLane)}>
-              <option value="top">Top</option>
-              <option value="jungle">Jungle</option>
-              <option value="mid">Mid</option>
-              <option value="bot">Bot (ADC + Support)</option>
+              <option value="top">{copy.form.lanes.top}</option>
+              <option value="jungle">{copy.form.lanes.jungle}</option>
+              <option value="mid">{copy.form.lanes.mid}</option>
+              <option value="bot">{copy.form.lanes.bot}</option>
             </select>
           </label>
         </div>
@@ -308,55 +388,55 @@ export default function App() {
           <>
             <div className="field-grid">
               <label>
-                I am playing
+                {copy.form.playerRole}
                 <select value={playerRole} onChange={(e) => setPlayerRole(e.target.value as BotPlayerRole)}>
-                  <option value="adc">ADC</option>
-                  <option value="support">Support</option>
+                  <option value="adc">{copy.form.roles.adc}</option>
+                  <option value="support">{copy.form.roles.support}</option>
                 </select>
               </label>
             </div>
             <div className="botlane-grid">
             <section className="card botlane-side">
-              <h3>Ally Botlane</h3>
+              <h3>{copy.form.allyBotlane}</h3>
               <label>
-                ADC
+                {copy.form.roles.adc}
                 <select value={playerChampion} onChange={(e) => setPlayerChampion(e.target.value)}>
                   {primaryChampions.map((champion) => (
                     <option key={champion} value={champion}>
-                      {champion}
+                      {championLabel(champion)}
                     </option>
                   ))}
                 </select>
               </label>
               <label>
-                Support
+                {copy.form.roles.support}
                 <select value={playerChampionPartner} onChange={(e) => setPlayerChampionPartner(e.target.value)}>
                   {partnerChampions.map((champion) => (
                     <option key={champion} value={champion}>
-                      {champion}
+                      {championLabel(champion)}
                     </option>
                   ))}
                 </select>
               </label>
             </section>
             <section className="card botlane-side">
-              <h3>Enemy Botlane</h3>
+              <h3>{copy.form.enemyBotlane}</h3>
               <label>
-                ADC
+                {copy.form.roles.adc}
                 <select value={enemyChampion} onChange={(e) => setEnemyChampion(e.target.value)}>
                   {enemyOptions.map((champion) => (
                     <option key={champion} value={champion}>
-                      {champion}
+                      {championLabel(champion)}
                     </option>
                   ))}
                 </select>
               </label>
               <label>
-                Support
+                {copy.form.roles.support}
                 <select value={enemyChampionPartner} onChange={(e) => setEnemyChampionPartner(e.target.value)}>
                   {enemyPartnerOptions.map((champion) => (
                     <option key={champion} value={champion}>
-                      {champion}
+                      {championLabel(champion)}
                     </option>
                   ))}
                 </select>
@@ -367,26 +447,26 @@ export default function App() {
         ) : (
           <div className="botlane-grid">
             <section className="card botlane-side">
-              <h3>Ally {selectedLane.toUpperCase()}</h3>
+              <h3>{formatTemplate(copy.form.allyLane, { lane: copy.form.lanes[selectedLane] })}</h3>
               <label>
-                Champion
+                {copy.form.champion}
                 <select value={playerChampion} onChange={(e) => setPlayerChampion(e.target.value)}>
                   {primaryChampions.map((champion) => (
                     <option key={champion} value={champion}>
-                      {champion}
+                      {championLabel(champion)}
                     </option>
                   ))}
                 </select>
               </label>
             </section>
             <section className="card botlane-side">
-              <h3>Enemy {selectedLane.toUpperCase()}</h3>
+              <h3>{formatTemplate(copy.form.enemyLane, { lane: copy.form.lanes[selectedLane] })}</h3>
               <label>
-                Champion
+                {copy.form.champion}
                 <select value={enemyChampion} onChange={(e) => setEnemyChampion(e.target.value)}>
                   {enemyOptions.map((champion) => (
                     <option key={champion} value={champion}>
-                      {champion}
+                      {championLabel(champion)}
                     </option>
                   ))}
                 </select>
@@ -396,13 +476,13 @@ export default function App() {
         )}
 
         <button type="submit" disabled={!canSubmit}>
-          {loading ? "Generating..." : "Get Matchup Coaching"}
+          {loading ? copy.form.submitLoading : copy.form.submitIdle}
         </button>
 
         {loadError ? <p className="error">{loadError}</p> : null}
         {submitError ? <p className="error">{submitError}</p> : null}
         {!loadError && playerChampion === enemyChampion ? (
-          <p className="hint">Choose two different champions.</p>
+          <p className="hint">{copy.feedback.chooseDifferent}</p>
         ) : null}
         {!loadError &&
         selectedLane === "bot" &&
@@ -410,12 +490,14 @@ export default function App() {
           enemyChampionPartner.length === 0 ||
           playerChampion === playerChampionPartner ||
           enemyChampion === enemyChampionPartner) ? (
-          <p className="hint">For bot lane, choose both duo champions and keep ADC/support picks different.</p>
+          <p className="hint">{copy.feedback.botlaneDifferent}</p>
         ) : null}
         {shouldAutoRefresh ? (
           <p className="hint">
-            Collecting more sample data... auto-refreshing every {Math.floor(AUTO_REFRESH_INTERVAL_MS / 1000)}s until{" "}
-            {result?.meta.sampleTarget ?? 10}+ total games are available.
+            {formatTemplate(copy.feedback.autoRefresh, {
+              seconds: Math.floor(AUTO_REFRESH_INTERVAL_MS / 1000),
+              sampleTarget: result?.meta.sampleTarget ?? 10
+            })}
           </p>
         ) : null}
       </form>
@@ -424,10 +506,10 @@ export default function App() {
         <main className="result-grid">
           <section className="card">
             <div className="title-row">
-              <h2>Matchup Difficulty</h2>
+              <h2>{copy.result.matchupDifficulty}</h2>
               <span
                 className="help-chip"
-                aria-label="Difficulty scale explanation"
+                aria-label={copy.result.difficultyHelpAria}
                 role="button"
                 tabIndex={0}
                 onClick={() => setShowDifficultyHelp((v) => !v)}
@@ -442,65 +524,64 @@ export default function App() {
               </span>
             </div>
             {showDifficultyHelp ? (
-              <p className="hint">
-                Difficulty score uses weighted lane stats when available (gold diff @15, win rate, early skirmish kills
-                minus deaths). Tiers: Easy, Favored, Even, Not Favored, Hard.
-              </p>
+              <p className="hint">{copy.result.difficultyHelp}</p>
             ) : null}
-            <p className={`difficulty ${result.difficulty}`}>{difficultyLabel(result.difficulty)}</p>
+            <p className={`difficulty ${result.difficulty}`}>{difficultyLabel(result.difficulty, language)}</p>
             <p className="meta">
-              {result.matchup.playerChampion} vs {result.matchup.enemyChampion} | {result.matchup.lane.toUpperCase()} |{" "}
-              {result.matchup.patch}
+              {championLabel(result.matchup.playerChampion)} vs {championLabel(result.matchup.enemyChampion)} |{" "}
+              {copy.form.lanes[result.matchup.lane]} | {result.matchup.patch}
             </p>
             <p className="meta">
-              Win rate: {result.meta.winRate !== null ? `${(result.meta.winRate * 100).toFixed(1)}%` : "N/A"}
+              {copy.result.winRate}:{" "}
+              {result.meta.winRate !== null ? `${(result.meta.winRate * 100).toFixed(1)}%` : copy.result.notAvailable}
             </p>
             {result.matchup.lane === "bot" && result.matchup.playerChampionPartner && result.matchup.enemyChampionPartner ? (
               <p className="meta">
-                Duo: {result.matchup.playerChampion} + {result.matchup.playerChampionPartner} vs{" "}
-                {result.matchup.enemyChampion} + {result.matchup.enemyChampionPartner}
+                {copy.result.duo}: {championLabel(result.matchup.playerChampion)} +{" "}
+                {championLabel(result.matchup.playerChampionPartner)} vs {championLabel(result.matchup.enemyChampion)} +{" "}
+                {championLabel(result.matchup.enemyChampionPartner)}
               </p>
             ) : null}
           </section>
 
           <section className="card">
-            <h2>{result.matchup.lane === "bot" ? "Combined Duo Plan (0-5 min)" : "Early Game Plan (0-5 min)"}</h2>
+            <h2>{result.matchup.lane === "bot" ? copy.result.combinedDuoPlan : copy.result.earlyGamePlan}</h2>
             <p>{result.earlyGamePlan}</p>
           </section>
 
           {result.matchup.lane === "bot" && result.botlaneAdvice ? (
             <>
               <section className="card">
-                <h2>How to play vs Enemy ADC</h2>
+                <h2>{copy.result.vsEnemyAdc}</h2>
                 <ul>
                   <li>
-                    <strong>Threat pattern:</strong> {result.botlaneAdvice.vsEnemyAdc.threatPattern}
+                    <strong>{copy.result.threatPattern}:</strong> {result.botlaneAdvice.vsEnemyAdc.threatPattern}
                   </li>
                   <li>
-                    <strong>Spacing rule:</strong> {result.botlaneAdvice.vsEnemyAdc.spacingRule}
+                    <strong>{copy.result.spacingRule}:</strong> {result.botlaneAdvice.vsEnemyAdc.spacingRule}
                   </li>
                   <li>
-                    <strong>Punish window:</strong> {result.botlaneAdvice.vsEnemyAdc.punishWindow}
+                    <strong>{copy.result.punishWindow}:</strong> {result.botlaneAdvice.vsEnemyAdc.punishWindow}
                   </li>
                   <li>
-                    <strong>Common trap:</strong> {result.botlaneAdvice.vsEnemyAdc.commonTrap}
+                    <strong>{copy.result.commonTrap}:</strong> {result.botlaneAdvice.vsEnemyAdc.commonTrap}
                   </li>
                 </ul>
               </section>
               <section className="card">
-                <h2>How to play vs Enemy Support</h2>
+                <h2>{copy.result.vsEnemySupport}</h2>
                 <ul>
                   <li>
-                    <strong>Threat pattern:</strong> {result.botlaneAdvice.vsEnemySupport.threatPattern}
+                    <strong>{copy.result.threatPattern}:</strong> {result.botlaneAdvice.vsEnemySupport.threatPattern}
                   </li>
                   <li>
-                    <strong>Spacing rule:</strong> {result.botlaneAdvice.vsEnemySupport.spacingRule}
+                    <strong>{copy.result.spacingRule}:</strong> {result.botlaneAdvice.vsEnemySupport.spacingRule}
                   </li>
                   <li>
-                    <strong>Punish window:</strong> {result.botlaneAdvice.vsEnemySupport.punishWindow}
+                    <strong>{copy.result.punishWindow}:</strong> {result.botlaneAdvice.vsEnemySupport.punishWindow}
                   </li>
                   <li>
-                    <strong>Common trap:</strong> {result.botlaneAdvice.vsEnemySupport.commonTrap}
+                    <strong>{copy.result.commonTrap}:</strong> {result.botlaneAdvice.vsEnemySupport.commonTrap}
                   </li>
                 </ul>
               </section>
@@ -508,7 +589,7 @@ export default function App() {
           ) : null}
 
           <section className="card">
-            <h2>Level 1-3 Rules</h2>
+            <h2>{copy.result.levelRules}</h2>
             <ul>
               {result.level1to3Rules.map((rule) => (
                 <li key={rule}>{rule}</li>
@@ -517,11 +598,11 @@ export default function App() {
           </section>
 
           <section className="card">
-            <h2>All-In Windows</h2>
+            <h2>{copy.result.allInWindows}</h2>
             <ul>
               {result.allInWindows.map((window) => (
                 <li key={`${window.timing}-${window.signal}`}>
-                  <strong>{timingLabel(window.timing)}:</strong> {window.signal}
+                  <strong>{timingLabel(window.timing, language)}:</strong> {window.signal}
                   {!isGenericAllInAction(window.action) ? <> {"->"} {window.action}</> : null}
                 </li>
               ))}
@@ -529,13 +610,15 @@ export default function App() {
           </section>
 
           <section className="card">
-            <h2>Rune Adjustments</h2>
-            <p className="hint">Source: {runeSourceLabel(result)}</p>
+            <h2>{copy.result.runeAdjustments}</h2>
+            <p className="hint">
+              {copy.result.source}: {runeSourceLabel(result, language)}
+            </p>
             {hasRuneAdjustment(result) ? (
               <ul>
                 {result.runeAdjustments.keystone.recommended || result.runeAdjustments.keystone.reason ? (
                   <li>
-                    <strong>Keystone:</strong> {result.runeAdjustments.keystone.recommended}
+                    <strong>{copy.result.keystone}:</strong> {result.runeAdjustments.keystone.recommended}
                     {result.runeAdjustments.keystone.reason
                       ? ` (${result.runeAdjustments.keystone.reason})`
                       : ""}
@@ -543,7 +626,7 @@ export default function App() {
                 ) : null}
                 {result.runeAdjustments.secondary.tree || result.runeAdjustments.secondary.reason ? (
                   <li>
-                    <strong>Secondary:</strong> {result.runeAdjustments.secondary.tree}
+                    <strong>{copy.result.secondary}:</strong> {result.runeAdjustments.secondary.tree}
                     {result.runeAdjustments.secondary.reason
                       ? ` (${result.runeAdjustments.secondary.reason})`
                       : ""}
@@ -551,17 +634,17 @@ export default function App() {
                 ) : null}
                 {result.runeAdjustments.shardsNote ? (
                   <li>
-                    <strong>Shard note:</strong> {result.runeAdjustments.shardsNote}
+                    <strong>{copy.result.shardNote}:</strong> {result.runeAdjustments.shardsNote}
                   </li>
                 ) : null}
               </ul>
             ) : (
-              <p className="hint">No rune adjustment suggested for this matchup.</p>
+              <p className="hint">{copy.result.noRuneAdjustment}</p>
             )}
           </section>
 
           <section className="card">
-            <h2>Common Mistakes</h2>
+            <h2>{copy.result.commonMistakes}</h2>
             <ul>
               {result.commonMistakes.map((mistake) => (
                 <li key={mistake}>{mistake}</li>
@@ -570,19 +653,20 @@ export default function App() {
           </section>
 
           <section className="card">
-            <h2>Data Quality</h2>
+            <h2>{copy.result.dataQuality}</h2>
             <ul>
               <li>
-                <strong>Confidence:</strong> {result.meta.dataConfidence}
+                <strong>{copy.result.confidence}:</strong> {result.meta.dataConfidence}
               </li>
               <li>
-                <strong>Sample size:</strong> {result.meta.sampleSize}
+                <strong>{copy.result.sampleSize}:</strong> {result.meta.sampleSize}
               </li>
               <li>
-                <strong>Stats used:</strong> {String(result.meta.source.stats)}
+                <strong>{copy.result.statsUsed}:</strong> {String(result.meta.source.stats)}
               </li>
               <li>
-                <strong>Generated:</strong> {new Date(result.meta.generatedAt).toLocaleString()}
+                <strong>{copy.result.generated}:</strong>{" "}
+                {new Date(result.meta.generatedAt).toLocaleString(language === "ja" ? "ja-JP" : "en-US")}
               </li>
             </ul>
             {result.meta.warnings.length > 0 ? (

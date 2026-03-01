@@ -18,7 +18,7 @@ export interface CoachMatchupRequest {
   playerRole?: BotPlayerRole;
   lane?: CoachLane;
   patch?: string;
-  language?: "en";
+  language?: "en" | "ja";
 }
 
 export interface AllInWindow {

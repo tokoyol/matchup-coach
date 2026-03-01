@@ -57,7 +57,8 @@ const CHAMPION_ALIASES: Record<string, string> = {
   "dr mundo": "Dr. Mundo",
   nunuandwillump: "Nunu & Willump",
   nunu: "Nunu & Willump",
-  wukong: "Wukong"
+  wukong: "Wukong",
+  monkeyking: "Wukong"
 };
 
 export function championKey(raw: string): string {

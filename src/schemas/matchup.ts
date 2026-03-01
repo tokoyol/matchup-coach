@@ -13,7 +13,7 @@ export const coachMatchupRequestSchema = z
       .string()
       .regex(/^[0-9]{2}\.[0-9]{1,2}$/)
       .optional(),
-    language: z.literal("en").optional()
+    language: z.enum(["en", "ja"]).optional()
   })
   .strict()
   .refine((data) => data.playerChampion !== data.enemyChampion, {

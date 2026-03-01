@@ -80,6 +80,7 @@ interface GeminiCoachServiceOptions {
   apiKeys?: string[];
   model: string;
 }
+type CoachLanguage = "en" | "ja";
 
 export interface GeminiStatus {
   configured: boolean;
@@ -127,7 +128,8 @@ function clip(value: string, max: number): string {
   return value.length <= max ? value : value.slice(0, max).trim();
 }
 
-function normalizeFromPlainText(raw: string): GeminiAdvice | null {
+function normalizeFromPlainText(raw: string, language: CoachLanguage = "en"): GeminiAdvice | null {
+  const isJa = language === "ja";
   const cleaned = raw
     .replace(/```(?:json)?/gi, "")
     .split(/\r?\n/)
@@ -143,10 +145,14 @@ function normalizeFromPlainText(raw: string): GeminiAdvice | null {
     .filter((line) => line !== firstLong)
     .slice(0, 3)
     .map((line) => clip(line, 160));
-  while (rules.length < 3) rules.push("Trade only when enemy key cooldowns are unavailable.");
+  while (rules.length < 3) {
+    rules.push(isJa ? "敵の主要スキルが落ちている時だけトレードする。" : "Trade only when enemy key cooldowns are unavailable.");
+  }
 
   const mistakes = bullets.slice(-3);
-  while (mistakes.length < 3) mistakes.unshift("Forcing trades without cooldown advantage.");
+  while (mistakes.length < 3) {
+    mistakes.unshift(isJa ? "有利なクールダウン状況でないのに無理にトレードする。" : "Forcing trades without cooldown advantage.");
+  }
 
   return {
     earlyGamePlan: firstLong,
@@ -154,13 +160,24 @@ function normalizeFromPlainText(raw: string): GeminiAdvice | null {
     allInWindows: [
       {
         timing: "level_3",
-        signal: clip(bullets[3] ?? "Enemy key defensive cooldown is down.", 160),
-        action: clip("Take a short commit trade and disengage before return damage.", 220)
+        signal: clip(bullets[3] ?? (isJa ? "敵の主要防御スキルがない。" : "Enemy key defensive cooldown is down."), 160),
+        action: clip(
+          isJa
+            ? "短く仕掛けてダメージ交換したら、反撃される前に下がる。"
+            : "Take a short commit trade and disengage before return damage.",
+          220
+        )
       },
       {
         timing: "level_6",
-        signal: clip(bullets[4] ?? "Enemy HP is below 70% and wave is favorable.", 160),
-        action: clip("Commit full combo with spacing and hold one spell for finish.", 220)
+        signal: clip(
+          bullets[4] ?? (isJa ? "敵HPが70%以下で、ウェーブ位置が有利。" : "Enemy HP is below 70% and wave is favorable."),
+          160
+        ),
+        action: clip(
+          isJa ? "間合いを保ってフルコンボし、とどめ用に1スキルを温存する。" : "Commit full combo with spacing and hold one spell for finish.",
+          220
+        )
       }
     ],
     runeAdjustments: {
@@ -194,10 +211,13 @@ function tryLenientParse(jsonText: string): unknown | null {
   return null;
 }
 
-function normalizeAdvice(input: GeminiAdviceRaw): GeminiAdvice {
+function normalizeAdvice(input: GeminiAdviceRaw, language: CoachLanguage = "en"): GeminiAdvice {
+  const isJa = language === "ja";
   const levelRules = input.level1to3Rules.map(cleanLine).filter(Boolean).slice(0, 5).map((line) => clip(line, 160));
   while (levelRules.length < 3) {
-    levelRules.push("Play around cooldowns and minion advantage before trading.");
+    levelRules.push(
+      isJa ? "トレード前にクールダウン差とミニオン有利を確認する。" : "Play around cooldowns and minion advantage before trading."
+    );
   }
 
   const windows = input.allInWindows
@@ -207,7 +227,12 @@ function normalizeAdvice(input: GeminiAdviceRaw): GeminiAdvice {
         return {
           timing: idx === 0 ? ("level_3" as const) : ("level_6" as const),
           signal: clip(cleaned, 160),
-          action: clip("Take a short commit trade and disengage if the enemy cooldowns return.", 220)
+          action: clip(
+            isJa
+              ? "短く仕掛け、敵のクールダウンが戻る前に下がる。"
+              : "Take a short commit trade and disengage if the enemy cooldowns return.",
+            220
+          )
         };
       }
       return {
@@ -221,14 +246,14 @@ function normalizeAdvice(input: GeminiAdviceRaw): GeminiAdvice {
   while (windows.length < 2) {
     windows.push({
       timing: windows.length === 0 ? "level_3" : "level_6",
-      signal: "Enemy key defensive cooldown is unavailable.",
-      action: clip("Take a short commit trade and disengage after your combo.", 220)
+      signal: isJa ? "敵の主要防御スキルが使えない。" : "Enemy key defensive cooldown is unavailable.",
+      action: clip(isJa ? "コンボ後は素早く離脱して被弾を抑える。" : "Take a short commit trade and disengage after your combo.", 220)
     });
   }
 
   const mistakes = input.commonMistakes.map(cleanLine).filter(Boolean).slice(0, 3).map((line) => clip(line, 180));
   while (mistakes.length < 3) {
-    mistakes.push("Taking low-value trades when enemy cooldowns are up.");
+    mistakes.push(isJa ? "敵のスキルがある状態で価値の低いトレードをする。" : "Taking low-value trades when enemy cooldowns are up.");
   }
 
   const plan = cleanLine(input.earlyGamePlan);
@@ -236,7 +261,9 @@ function normalizeAdvice(input: GeminiAdviceRaw): GeminiAdvice {
     earlyGamePlan:
       plan.length >= 20
         ? clip(plan, 600)
-        : "Play a controlled early lane, preserve health, and only trade when enemy cooldowns are down.",
+        : isJa
+          ? "序盤は無理をせず体力を維持し、敵の主要スキル後だけトレードする。"
+          : "Play a controlled early lane, preserve health, and only trade when enemy cooldowns are down.",
     level1to3Rules: levelRules,
     allInWindows: windows,
     runeAdjustments: {
@@ -263,34 +290,67 @@ function normalizeBotEnemySection(input: z.infer<typeof botEnemySectionSchema>):
   };
 }
 
-function fallbackBotEnemyAdvice(playerRole: "adc" | "support"): GeminiBotEnemyAdvice {
+function fallbackBotEnemyAdvice(playerRole: "adc" | "support", language: CoachLanguage = "en"): GeminiBotEnemyAdvice {
+  const isJa = language === "ja";
   const sharedAdc =
     playerRole === "adc"
       ? {
-          threatPattern: "Enemy ADC wins if they keep sustained auto uptime while your wave is thin.",
-          spacingRule: "Trade around last-hit moments and stay just outside their free auto range between minion kills.",
-          punishWindow: "Step in when enemy ADC uses a damage spell for wave clear or misses their poke cooldown.",
-          commonTrap: "Overchasing past your support position and losing return trade tempo."
+          threatPattern: isJa
+            ? "敵ADCは、こちらのウェーブが薄い時に通常攻撃を継続できると強い。"
+            : "Enemy ADC wins if they keep sustained auto uptime while your wave is thin.",
+          spacingRule: isJa
+            ? "ラストヒットの瞬間に合わせてトレードし、無償AA圏外を維持する。"
+            : "Trade around last-hit moments and stay just outside their free auto range between minion kills.",
+          punishWindow: isJa
+            ? "敵ADCがウェーブ処理にスキルを使うか、ポークを外した直後に前へ出る。"
+            : "Step in when enemy ADC uses a damage spell for wave clear or misses their poke cooldown.",
+          commonTrap: isJa
+            ? "味方サポートより前に出過ぎて、返しのトレードを受ける。"
+            : "Overchasing past your support position and losing return trade tempo."
         }
       : {
-          threatPattern: "Enemy ADC is dangerous when they can auto freely while you are disconnected from your ADC.",
-          spacingRule: "Hold lateral spacing with your ADC so you can peel or engage without splitting threat zones.",
-          punishWindow: "Pressure when enemy ADC uses a key farming cooldown and cannot match immediate retaliation.",
-          commonTrap: "Forcing an engage while your ADC is not in range to follow up."
+          threatPattern: isJa
+            ? "敵ADCは、あなたが味方ADCと分断された時にフリーで殴れると危険。"
+            : "Enemy ADC is dangerous when they can auto freely while you are disconnected from your ADC.",
+          spacingRule: isJa
+            ? "味方ADCと横並びの間合いを保ち、分断されずにピール/エンゲージする。"
+            : "Hold lateral spacing with your ADC so you can peel or engage without splitting threat zones.",
+          punishWindow: isJa
+            ? "敵ADCがファーム用主要スキルを使った直後に圧力をかける。"
+            : "Pressure when enemy ADC uses a key farming cooldown and cannot match immediate retaliation.",
+          commonTrap: isJa
+            ? "味方ADCが届かない位置で先にエンゲージしてしまう。"
+            : "Forcing an engage while your ADC is not in range to follow up."
         };
   const sharedSupport =
     playerRole === "adc"
       ? {
-          threatPattern: "Enemy support controls the lane through engage or poke cooldown timing.",
-          spacingRule: "Track support threat range first, then position for CS only when their key tool is down.",
-          punishWindow: "Punish after enemy support misses hook, CC, or primary poke sequence.",
-          commonTrap: "Walking up for CS before checking enemy support cooldown and angle."
+          threatPattern: isJa
+            ? "敵サポートはエンゲージ/ポークのCD管理でレーン主導権を握る。"
+            : "Enemy support controls the lane through engage or poke cooldown timing.",
+          spacingRule: isJa
+            ? "先に敵サポートの射程を確認し、主要スキル後にだけCSへ寄る。"
+            : "Track support threat range first, then position for CS only when their key tool is down.",
+          punishWindow: isJa
+            ? "フックやCC、主力ポークを外した直後にトレードする。"
+            : "Punish after enemy support misses hook, CC, or primary poke sequence.",
+          commonTrap: isJa
+            ? "敵サポートのCDと角度確認なしでCSを取りに行く。"
+            : "Walking up for CS before checking enemy support cooldown and angle."
         }
       : {
-          threatPattern: "Enemy support decides many lane starts through vision and cooldown control.",
-          spacingRule: "Mirror or shadow enemy support movement so your ADC is never isolated in trade windows.",
-          punishWindow: "Take space immediately after enemy support misses engage or uses CC defensively.",
-          commonTrap: "Roaming or warding on bad timers that leave your ADC exposed to 2v1 pressure."
+          threatPattern: isJa
+            ? "敵サポートは視界とCD管理でレーン開始の主導権を握る。"
+            : "Enemy support decides many lane starts through vision and cooldown control.",
+          spacingRule: isJa
+            ? "敵サポートの動きを合わせて追い、味方ADCが孤立しない位置を保つ。"
+            : "Mirror or shadow enemy support movement so your ADC is never isolated in trade windows.",
+          punishWindow: isJa
+            ? "敵サポートがエンゲージを外すか、防御的にCCを使った直後に前へ出る。"
+            : "Take space immediately after enemy support misses engage or uses CC defensively.",
+          commonTrap: isJa
+            ? "悪いタイミングでローム/ワードし、味方ADCを2v1に晒す。"
+            : "Roaming or warding on bad timers that leave your ADC exposed to 2v1 pressure."
         };
   return {
     playerRole,
@@ -443,7 +503,13 @@ export class GeminiCoachService {
     enemyTags: string[];
     stats?: MatchupStats | null;
     partnerStats?: MatchupStats | null;
+    language?: CoachLanguage;
   }): Promise<GeminiAdviceResult> {
+    const language: CoachLanguage = input.language === "ja" ? "ja" : "en";
+    const outputLanguageInstruction =
+      language === "ja"
+        ? "Output language: Japanese. Keep keys in JSON as specified, but all coaching text values must be natural Japanese."
+        : "Output language: English.";
     const statsBlock = input.stats
       ? `games=${input.stats.games}, winRate=${input.stats.winRate}, goldDiff15=${input.stats.goldDiff15}, pre6KillRate=${input.stats.pre6KillRate}, earlyDeathRate=${input.stats.earlyDeathRate}`
       : "stats unavailable";
@@ -463,6 +529,7 @@ Constraints:
 - commonMistakes: exactly 3 strings
 - keep tone concise and action-oriented
 - if there is no meaningful rune change, return empty strings in runeAdjustments fields
+${outputLanguageInstruction}
 
 Matchup:
 playerChampion=${input.playerChampion}
@@ -528,8 +595,8 @@ partnerStats=${partnerStatsBlock}
         const parsedJson = tryLenientParse(jsonText);
         const normalized =
           parsedJson && geminiAdviceSchema.safeParse(parsedJson).success
-            ? normalizeAdvice((parsedJson as GeminiAdviceRaw))
-            : normalizeFromPlainText(text);
+            ? normalizeAdvice(parsedJson as GeminiAdviceRaw, language)
+            : normalizeFromPlainText(text, language);
         if (!normalized) {
           lastFailure = "Gemini JSON did not match expected coaching schema.";
           return { advice: null, failureReason: lastFailure };
@@ -561,6 +628,7 @@ Each key is an object with exactly:
 
 Write role-specific advice from the player's perspective.
 Keep each value practical and concise (1 sentence each).
+${outputLanguageInstruction}
 `.trim();
         const botResponse = await this.fetchWithTimeout(
           url,
@@ -579,7 +647,7 @@ Keep each value practical and concise (1 sentence each).
         if (!botResponse.ok) {
           return {
             advice: normalized,
-            botlaneAdvice: fallbackBotEnemyAdvice(input.playerRole as "adc" | "support")
+            botlaneAdvice: fallbackBotEnemyAdvice(input.playerRole as "adc" | "support", language)
           };
         }
         const botPayload = (await botResponse.json()) as Record<string, unknown>;
@@ -591,7 +659,7 @@ Keep each value practical and concise (1 sentence each).
         if (typeof botText !== "string" || !botText.trim()) {
           return {
             advice: normalized,
-            botlaneAdvice: fallbackBotEnemyAdvice(input.playerRole as "adc" | "support")
+            botlaneAdvice: fallbackBotEnemyAdvice(input.playerRole as "adc" | "support", language)
           };
         }
         const botJsonText = extractJsonObject(botText);
@@ -600,7 +668,7 @@ Keep each value practical and concise (1 sentence each).
         if (!parsedBotAdvice.success) {
           return {
             advice: normalized,
-            botlaneAdvice: fallbackBotEnemyAdvice(input.playerRole as "adc" | "support")
+            botlaneAdvice: fallbackBotEnemyAdvice(input.playerRole as "adc" | "support", language)
           };
         }
         return {
