@@ -54,6 +54,16 @@ function clampWarning(message: string): string {
   return trimmed.length <= 120 ? trimmed : `${trimmed.slice(0, 117).trim()}...`;
 }
 
+function getPreviousPatch(patch: string): string | null {
+  const match = /^(\d{2})\.(\d{1,2})$/.exec(patch.trim());
+  if (!match) return null;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return null;
+  if (minor <= 0) return null;
+  return `${String(major).padStart(2, "0")}.${minor - 1}`;
+}
+
 const CHAMPION_LOCALIZATION_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
 
 let cachedJaChampionLocalization: {
@@ -176,6 +186,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const isBotAggregate = rawLane === "bot";
       const dataLane = normalizeLane(rawLane);
       const lane = isBotAggregate ? "bot" : dataLane;
+      const previousPatch = getPreviousPatch(currentPatch);
+      let sourcePatch = currentPatch;
       const dynamicChampions = isBotAggregate
         ? statsRepository
           ? [
@@ -186,14 +198,24 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         : statsRepository
           ? await statsRepository.listChampionsByLane(currentPatch, dataLane, 400)
           : [];
+      let resolvedDynamicChampions = dynamicChampions;
+      if (statsRepository && resolvedDynamicChampions.length === 0 && previousPatch) {
+        resolvedDynamicChampions = isBotAggregate
+          ? [
+              ...(await statsRepository.listChampionsByLane(previousPatch, "adc", 400)),
+              ...(await statsRepository.listChampionsByLane(previousPatch, "support", 400))
+            ]
+          : await statsRepository.listChampionsByLane(previousPatch, dataLane, 400);
+        if (resolvedDynamicChampions.length > 0) sourcePatch = previousPatch;
+      }
       const champions =
         lane === "top"
-          ? [...new Set([...SUPPORTED_TOP_CHAMPIONS, ...dynamicChampions])]
-          : [...new Set(dynamicChampions)];
+          ? [...new Set([...SUPPORTED_TOP_CHAMPIONS, ...resolvedDynamicChampions])]
+          : [...new Set(resolvedDynamicChampions)];
       const normalizedChampions = [...new Set(champions.map((champion) => normalizeChampionName(champion)))];
       return res.json({
         lane,
-        patch: currentPatch,
+        patch: sourcePatch,
         champions: normalizedChampions.sort((a, b) => a.localeCompare(b))
       });
     } catch (error) {
@@ -228,6 +250,10 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
     try {
       const language = parseInput.data.language === "ja" ? "ja" : "en";
       const lane = normalizeCoachLane(parseInput.data.lane);
+      const requestedPatch = parseInput.data.patch ?? currentPatch;
+      const previousPatch = getPreviousPatch(requestedPatch);
+      let resolvedPatch = requestedPatch;
+      let usedPreviousPatchFallback = false;
       let primaryStats: MatchupStats | null = null;
       let partnerStats: MatchupStats | null = null;
       let primaryStatsGames = 0;
@@ -243,7 +269,6 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           }
         | null = null;
       let usedExternalProvider: string | null = null;
-      const patch = parseInput.data.patch ?? currentPatch;
       const botlaneContexts =
         lane === "bot" && parseInput.data.playerChampionPartner && parseInput.data.enemyChampionPartner && parseInput.data.playerRole
           ? {
@@ -254,6 +279,72 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
               enemySupport: parseInput.data.enemyChampionPartner
             }
           : undefined;
+      if (statsRepository) {
+        if (lane === "bot") {
+          const [adcStats, supportStats] = await Promise.all([
+            statsRepository.get(requestedPatch, "adc", parseInput.data.playerChampion, parseInput.data.enemyChampion),
+            statsRepository.get(
+              requestedPatch,
+              "support",
+              parseInput.data.playerChampionPartner ?? "",
+              parseInput.data.enemyChampionPartner ?? ""
+            )
+          ]);
+          primaryStats = adcStats;
+          partnerStats = supportStats;
+          primaryStatsGames = adcStats?.games ?? 0;
+          partnerStatsGames = supportStats?.games ?? 0;
+        } else {
+          const laneStats = await statsRepository.get(
+            requestedPatch,
+            lane,
+            parseInput.data.playerChampion,
+            parseInput.data.enemyChampion
+          );
+          primaryStats = laneStats;
+          primaryStatsGames = laneStats?.games ?? 0;
+        }
+      }
+      if (
+        statsRepository &&
+        previousPatch &&
+        primaryStatsGames + partnerStatsGames < requiredSampleGames
+      ) {
+        if (lane === "bot") {
+          const [adcStatsFallback, supportStatsFallback] = await Promise.all([
+            statsRepository.get(previousPatch, "adc", parseInput.data.playerChampion, parseInput.data.enemyChampion),
+            statsRepository.get(
+              previousPatch,
+              "support",
+              parseInput.data.playerChampionPartner ?? "",
+              parseInput.data.enemyChampionPartner ?? ""
+            )
+          ]);
+          const fallbackGames = (adcStatsFallback?.games ?? 0) + (supportStatsFallback?.games ?? 0);
+          if (fallbackGames > primaryStatsGames + partnerStatsGames) {
+            primaryStats = adcStatsFallback;
+            partnerStats = supportStatsFallback;
+            primaryStatsGames = adcStatsFallback?.games ?? 0;
+            partnerStatsGames = supportStatsFallback?.games ?? 0;
+            resolvedPatch = previousPatch;
+            usedPreviousPatchFallback = true;
+          }
+        } else {
+          const laneStatsFallback = await statsRepository.get(
+            previousPatch,
+            lane,
+            parseInput.data.playerChampion,
+            parseInput.data.enemyChampion
+          );
+          const fallbackGames = laneStatsFallback?.games ?? 0;
+          if (fallbackGames > primaryStatsGames) {
+            primaryStats = laneStatsFallback;
+            primaryStatsGames = fallbackGames;
+            resolvedPatch = previousPatch;
+            usedPreviousPatchFallback = true;
+          }
+        }
+      }
       const riotSampleSize = 0;
       if (externalStatsProvider) {
         try {
@@ -262,7 +353,7 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
               withTimeout(
                 externalStatsProvider.getMatchupStats({
                   lane: "adc",
-                  patch,
+                  patch: requestedPatch,
                   playerChampion: parseInput.data.playerChampion,
                   enemyChampion: parseInput.data.enemyChampion
                 }),
@@ -272,7 +363,7 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
               withTimeout(
                 externalStatsProvider.getMatchupStats({
                   lane: "support",
-                  patch,
+                  patch: requestedPatch,
                   playerChampion: parseInput.data.playerChampionPartner ?? "",
                   enemyChampion: parseInput.data.enemyChampionPartner ?? ""
                 }),
@@ -307,7 +398,7 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             const externalStats = await withTimeout(
               externalStatsProvider.getMatchupStats({
                 lane,
-                patch,
+                patch: requestedPatch,
                 playerChampion: parseInput.data.playerChampion,
                 enemyChampion: parseInput.data.enemyChampion
               }),
@@ -346,6 +437,7 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const coaching = await generateMatchupCoaching(
         {
           ...parseInput.data,
+          patch: resolvedPatch,
           lane
         },
         currentPatch,
@@ -378,6 +470,16 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             language === "ja"
               ? `外部ソースを利用できません (${externalSourceMeta.status})${externalSourceMeta.failureReason ? `: ${externalSourceMeta.failureReason}` : ""}`
               : `External source unavailable (${externalSourceMeta.status})${externalSourceMeta.failureReason ? `: ${externalSourceMeta.failureReason}` : ""}`
+          ),
+          ...coaching.meta.warnings
+        ];
+      }
+      if (usedPreviousPatchFallback) {
+        coaching.meta.warnings = [
+          clampWarning(
+            language === "ja"
+              ? `現在パッチ(${requestedPatch})のサンプルが不足しているため、前パッチ(${resolvedPatch})のデータを使用しています。`
+              : `Current patch (${requestedPatch}) has limited samples; using previous patch (${resolvedPatch}) data.`
           ),
           ...coaching.meta.warnings
         ];

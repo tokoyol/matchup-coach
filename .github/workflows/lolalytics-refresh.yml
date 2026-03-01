@@ -2,9 +2,14 @@ name: Scheduled Lolalytics Refresh
 
 on:
   workflow_dispatch:
+    inputs:
+      patch:
+        description: "Patch to scrape (e.g. 26.4)"
+        required: false
+        default: ""
 
 env:
-  LOLALYTICS_PATCH: ${{ vars.LOLALYTICS_PATCH || '26.4' }}
+  LOLALYTICS_PATCH: ${{ github.event.inputs.patch || vars.LOLALYTICS_PATCH || '26.4' }}
   LOLALYTICS_MAX_CHAMPIONS: ${{ vars.LOLALYTICS_MAX_CHAMPIONS || '80' }}
   LOLALYTICS_REQUEST_DELAY_MS: ${{ vars.LOLALYTICS_REQUEST_DELAY_MS || '150' }}
   LOLALYTICS_ROLE_MAX_PAIRS: ${{ vars.LOLALYTICS_ROLE_MAX_PAIRS || '2000' }}
