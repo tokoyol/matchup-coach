@@ -1,6 +1,15 @@
 import { championKey } from "../data/champions.js";
 
 export type ChampionResourceType = "mana" | "energy" | "manaless" | "fury" | "other";
+export type ChampionSpellRole = "damage" | "cc" | "engage" | "disengage" | "mobility" | "zone" | "sustain";
+
+export interface ChampionSpellFact {
+  slot: "Q" | "W" | "E" | "R";
+  spellId: string;
+  displayNameEn: string;
+  displayNameJa: string;
+  roles: ChampionSpellRole[];
+}
 
 export interface ChampionFacts {
   championId: string;
@@ -8,6 +17,7 @@ export interface ChampionFacts {
   displayNameEn: string;
   displayNameJa: string;
   resourceType: ChampionResourceType;
+  spellFacts: ChampionSpellFact[];
 }
 
 interface DDragonChampionPayload {
@@ -17,6 +27,23 @@ interface DDragonChampionPayload {
       id: string;
       name: string;
       partype?: string;
+    }
+  >;
+}
+
+interface DDragonChampionFullPayload {
+  data: Record<
+    string,
+    {
+      id: string;
+      name: string;
+      partype?: string;
+      spells: Array<{
+        id: string;
+        name: string;
+        description?: string;
+        tooltip?: string;
+      }>;
     }
   >;
 }
@@ -34,6 +61,40 @@ function mapResourceType(raw: string | undefined): ChampionResourceType {
   if (normalized === "none") return "manaless";
   if (normalized === "fury") return "fury";
   return "other";
+}
+
+function classifySpellRoles(raw: string): ChampionSpellRole[] {
+  const text = raw.toLowerCase();
+  const roles = new Set<ChampionSpellRole>();
+
+  if (/\bdeals?\b|\bdamage\b|physical damage|magic damage|true damage/.test(text)) roles.add("damage");
+  if (/\bstun\b|\broot\b|\bslow\b|\bfear\b|\btaunt\b|\bcharm\b|\bknock up\b|\bknockup\b|\bknockdown\b|\bpull\b|\bairborne\b|\bsuppress\b/.test(text)) {
+    roles.add("cc");
+  }
+  if (/\bzone\b|area\b|field\b|lingers?\b|persists?\b|for \d+(?:\.\d+)? seconds?/.test(text)) roles.add("zone");
+  if (/\bdash\b|\bblink\b|\bleap\b|\breposition\b|\bmovement speed\b|\bmove speed\b|\bunstoppable\b/.test(text)) {
+    roles.add("mobility");
+  }
+  if (/\bgap close\b|\bcloser\b|dashes? to\b|leaps? to\b|pulls? target\b|pulls? enemies?\b/.test(text)) {
+    roles.add("engage");
+  }
+  if (/\bknocks? back\b|\bpushes? (?:them|target|enemies?) away\b|\bretreat\b|\bescape\b|\bdisengage\b/.test(text)) {
+    roles.add("disengage");
+  }
+  if (/\bheal\b|\bshield\b|\bomnivamp\b|\blifesteal\b|restores? health\b/.test(text)) roles.add("sustain");
+
+  if (roles.size === 0) {
+    roles.add("damage");
+  }
+  return [...roles];
+}
+
+function applySpellRoleOverrides(championId: string, slot: "Q" | "W" | "E" | "R", roles: ChampionSpellRole[]): ChampionSpellRole[] {
+  // Known edge case: Aatrox W is a catch/zone tool, not a disengage tool.
+  if (championId === "Aatrox" && slot === "W") {
+    return ["cc", "zone", "engage"];
+  }
+  return roles;
 }
 
 export class ChampionFactsService {
@@ -57,28 +118,54 @@ export class ChampionFactsService {
       throw new Error("Data Dragon returned no versions.");
     }
 
-    const [enResponse, jaResponse] = await Promise.all([
+    const [enResponse, jaResponse, enFullResponse, jaFullResponse] = await Promise.all([
       fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/en_US/champion.json`),
-      fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/ja_JP/champion.json`)
+      fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/ja_JP/champion.json`),
+      fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/en_US/championFull.json`),
+      fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/ja_JP/championFull.json`)
     ]);
-    if (!enResponse.ok || !jaResponse.ok) {
-      throw new Error(`Failed to fetch champion facts payloads (${enResponse.status}/${jaResponse.status}).`);
+    if (!enResponse.ok || !jaResponse.ok || !enFullResponse.ok || !jaFullResponse.ok) {
+      throw new Error(
+        `Failed to fetch champion facts payloads (${enResponse.status}/${jaResponse.status}/${enFullResponse.status}/${jaFullResponse.status}).`
+      );
     }
 
-    const [enData, jaData] = (await Promise.all([
+    const [enData, jaData, enFullData, jaFullData] = (await Promise.all([
       enResponse.json() as Promise<DDragonChampionPayload>,
-      jaResponse.json() as Promise<DDragonChampionPayload>
-    ])) as [DDragonChampionPayload, DDragonChampionPayload];
+      jaResponse.json() as Promise<DDragonChampionPayload>,
+      enFullResponse.json() as Promise<DDragonChampionFullPayload>,
+      jaFullResponse.json() as Promise<DDragonChampionFullPayload>
+    ])) as [DDragonChampionPayload, DDragonChampionPayload, DDragonChampionFullPayload, DDragonChampionFullPayload];
 
     const factsByKey: Record<string, ChampionFacts> = {};
+    const slots: Array<"Q" | "W" | "E" | "R"> = ["Q", "W", "E", "R"];
     Object.values(enData.data).forEach((enChampion) => {
       const jaChampion = jaData.data[enChampion.id];
+      const enFullChampion = enFullData.data[enChampion.id];
+      const jaFullChampion = jaFullData.data[enChampion.id];
+      const spellFacts: ChampionSpellFact[] = (enFullChampion?.spells ?? []).slice(0, 4).map((spell, idx) => {
+        const slot = slots[idx] ?? "Q";
+        const jaSpell = jaFullChampion?.spells?.[idx];
+        const roles = applySpellRoleOverrides(
+          enChampion.id,
+          slot,
+          classifySpellRoles(`${spell.description ?? ""} ${spell.tooltip ?? ""}`)
+        );
+        return {
+          slot,
+          spellId: spell.id,
+          displayNameEn: spell.name,
+          displayNameJa: jaSpell?.name ?? spell.name,
+          roles
+        };
+      });
       const facts: ChampionFacts = {
         championId: enChampion.id,
         canonicalName: enChampion.name,
         displayNameEn: enChampion.name,
         displayNameJa: jaChampion?.name ?? enChampion.name,
-        resourceType: mapResourceType(enChampion.partype)
+        resourceType: mapResourceType(enChampion.partype),
+        spellFacts
       };
 
       factsByKey[championKey(enChampion.id)] = facts;
@@ -92,25 +179,38 @@ export class ChampionFactsService {
     };
   }
 
-  async getChampionFacts(championName: string): Promise<ChampionFacts | null> {
+  private async getOrRefreshCache(): Promise<ChampionFactsCache> {
     const now = Date.now();
     if (!this.isCacheFresh(now)) {
       this.cache = await this.fetchLatestFacts();
     }
+    if (!this.cache) {
+      throw new Error("Champion facts cache unavailable.");
+    }
+    return this.cache;
+  }
+
+  async getChampionFacts(championName: string): Promise<ChampionFacts | null> {
+    const cache = await this.getOrRefreshCache();
     const key = championKey(championName);
-    if (!key || !this.cache) return null;
-    return this.cache.factsByKey[key] ?? null;
+    if (!key) return null;
+    return cache.factsByKey[key] ?? null;
   }
 
   async getStatus(): Promise<{ patch: string | null; loaded: boolean; championCount: number }> {
-    const now = Date.now();
-    if (!this.isCacheFresh(now)) {
-      this.cache = await this.fetchLatestFacts();
-    }
+    const cache = await this.getOrRefreshCache();
     return {
-      patch: this.cache?.patch ?? null,
-      loaded: Boolean(this.cache),
-      championCount: this.cache ? new Set(Object.values(this.cache.factsByKey).map((facts) => facts.championId)).size : 0
+      patch: cache.patch,
+      loaded: true,
+      championCount: new Set(Object.values(cache.factsByKey).map((facts) => facts.championId)).size
+    };
+  }
+
+  async getFactsByKey(): Promise<{ patch: string; factsByKey: Record<string, ChampionFacts> }> {
+    const cache = await this.getOrRefreshCache();
+    return {
+      patch: cache.patch,
+      factsByKey: cache.factsByKey
     };
   }
 }

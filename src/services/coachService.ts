@@ -1,7 +1,7 @@
 import type { CoachMatchupRequestInput, CoachMatchupResponseOutput } from "../schemas/matchup.js";
 import { CHAMPION_TAGS } from "../data/champions.js";
 import type { MatchupStats } from "../types/stats.js";
-import type { ChampionFacts } from "./championFactsService.js";
+import type { ChampionFacts, ChampionSpellFact } from "./championFactsService.js";
 import { GeminiCoachService } from "./geminiCoachService.js";
 
 type CoachLanguage = "en" | "ja";
@@ -321,6 +321,69 @@ function applyFactGuardToLine(
   return { value: replacement, changed: true };
 }
 
+function resolveMentionedSpell(
+  line: string,
+  facts: ChampionFacts
+): { spell: ChampionSpellFact } | null {
+  const normalizedLine = normalizeContentKey(line);
+  const championLabels = [facts.displayNameEn, facts.displayNameJa, facts.canonicalName]
+    .map((name) => normalizeContentKey(name))
+    .filter((name, idx, arr) => name.length > 0 && arr.indexOf(name) === idx);
+  if (championLabels.length === 0) return null;
+
+  const hasChampionMention = championLabels.some((label) => normalizedLine.includes(label));
+  if (!hasChampionMention) return null;
+
+  const slots: Array<"Q" | "W" | "E" | "R"> = ["Q", "W", "E", "R"];
+  for (const slot of slots) {
+    const slotLower = slot.toLowerCase();
+    const hasSlotMention =
+      championLabels.some((label) => normalizedLine.includes(`${label}${slotLower}`)) ||
+      championLabels.some((label) => normalizedLine.includes(`${slotLower}${label}`)) ||
+      new RegExp(`\\b${slotLower}\\b`, "i").test(line);
+    if (!hasSlotMention) continue;
+    const spell = facts.spellFacts.find((entry) => entry.slot === slot);
+    if (spell) return { spell };
+  }
+  return null;
+}
+
+function applySpellRoleFactGuardToLine(
+  line: string,
+  factsList: ChampionFacts[],
+  language: CoachLanguage
+): { value: string; changed: boolean } {
+  const disengagePattern = /\bdisengage\b|\bretreat\b|\bescape\b|離脱|逃げ|撤退|引き/i;
+  const explicitNegation = /\bnot\s+(?:a\s+)?disengage\b|離脱(?:スキル|手段)?ではない/i;
+  if (!disengagePattern.test(line) || explicitNegation.test(line)) {
+    return { value: line, changed: false };
+  }
+
+  const lowerLine = line.toLowerCase();
+  const hasGenericSpellReference = /\bq\b|\bw\b|\be\b|\br\b/i.test(lowerLine);
+  if (!hasGenericSpellReference) {
+    return { value: line, changed: false };
+  }
+
+  for (const facts of factsList) {
+    const mentioned = resolveMentionedSpell(line, facts);
+    if (!mentioned) continue;
+    if (mentioned.spell.roles.includes("disengage")) {
+      return { value: line, changed: false };
+    }
+    const championName = language === "ja" ? facts.displayNameJa : facts.displayNameEn;
+    const spellName = language === "ja" ? mentioned.spell.displayNameJa : mentioned.spell.displayNameEn;
+    const roleTextEn = mentioned.spell.roles.length > 0 ? mentioned.spell.roles.join("/") : "utility";
+    const replacement =
+      language === "ja"
+        ? `${championName}の${mentioned.spell.slot}（${spellName}）は主に${mentioned.spell.roles.includes("cc") ? "拘束" : "圧力"}用で、離脱は間合い管理や移動スキルで行う。`
+        : `${championName} ${mentioned.spell.slot} (${spellName}) is mainly a ${roleTextEn} tool, not a primary disengage; disengage with spacing or true mobility tools.`;
+    return { value: replacement, changed: true };
+  }
+
+  return { value: line, changed: false };
+}
+
 function enforceChampionFactConsistency(
   advice: Pick<
     CoachMatchupResponseOutput,
@@ -337,21 +400,27 @@ function enforceChampionFactConsistency(
   botlaneAdvice: CoachMatchupResponseOutput["botlaneAdvice"];
   interventionCount: number;
 } {
-  const nonManaFacts = [
+  const allFacts = [
     facts?.playerFacts,
     facts?.enemyFacts,
     facts?.playerPartnerFacts,
     facts?.enemyPartnerFacts
-  ].filter((factsEntry): factsEntry is ChampionFacts => Boolean(factsEntry && factsEntry.resourceType !== "mana"));
-  if (nonManaFacts.length === 0) {
+  ].filter((factsEntry): factsEntry is ChampionFacts => Boolean(factsEntry));
+  const nonManaFacts = allFacts.filter((factsEntry) => factsEntry.resourceType !== "mana");
+  if (allFacts.length === 0) {
     return { advice, botlaneAdvice, interventionCount: 0 };
   }
 
   let interventionCount = 0;
   const scrub = (line: string): string => {
-    const next = applyFactGuardToLine(line, nonManaFacts, language);
-    if (next.changed) interventionCount += 1;
-    return next.value;
+    const manaGuarded = applyFactGuardToLine(line, nonManaFacts, language);
+    if (manaGuarded.changed) {
+      interventionCount += 1;
+      return manaGuarded.value;
+    }
+    const spellGuarded = applySpellRoleFactGuardToLine(line, allFacts, language);
+    if (spellGuarded.changed) interventionCount += 1;
+    return spellGuarded.value;
   };
 
   const nextAdvice = {

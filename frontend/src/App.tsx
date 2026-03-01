@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { COPY, detectInitialLanguage, formatTemplate, persistLanguage, type AppLanguage } from "./i18n";
+import ChampionPicker from "./components/ChampionPicker";
 
 type Difficulty = "easy" | "favored" | "even" | "not_favored" | "hard";
 type CoachLane = "top" | "jungle" | "mid" | "bot";
@@ -12,10 +13,17 @@ interface ChampionsResponse {
   champions: string[];
 }
 
-interface ChampionLocalizationResponse {
-  language: AppLanguage;
+interface ChampionMetadataResponse {
   patch: string;
-  names: Record<string, string>;
+  championsByKey: Record<
+    string,
+    {
+      championId: string;
+      canonicalName: string;
+      displayNameEn: string;
+      displayNameJa: string;
+    }
+  >;
 }
 
 function championNameKey(value: string): string {
@@ -172,6 +180,8 @@ export default function App() {
   const [submitError, setSubmitError] = useState<string>("");
   const [showDifficultyHelp, setShowDifficultyHelp] = useState<boolean>(false);
   const [jaChampionNames, setJaChampionNames] = useState<Record<string, string>>({});
+  const [championIdByKey, setChampionIdByKey] = useState<Record<string, string>>({});
+  const [iconPatch, setIconPatch] = useState<string>("");
   const copy = COPY[language];
 
   useEffect(() => {
@@ -179,28 +189,34 @@ export default function App() {
   }, [language]);
 
   useEffect(() => {
-    if (language !== "ja") return;
-    if (Object.keys(jaChampionNames).length > 0) return;
+    if (Object.keys(championIdByKey).length > 0 && Object.keys(jaChampionNames).length > 0 && iconPatch) return;
 
     let active = true;
-    const loadJapaneseChampionNames = async () => {
+    const loadChampionMetadata = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/champion-localization?language=ja`);
+        const response = await fetch(`${API_BASE}/api/champion-metadata`);
         if (!response.ok) return;
-        const payload = (await response.json()) as ChampionLocalizationResponse;
-        const jaByChampionKey = payload.names ?? {};
+        const payload = (await response.json()) as ChampionMetadataResponse;
+        const nextIdByKey: Record<string, string> = {};
+        const nextJaByKey: Record<string, string> = {};
+        Object.entries(payload.championsByKey ?? {}).forEach(([key, champion]) => {
+          nextIdByKey[key] = champion.championId;
+          nextJaByKey[key] = champion.displayNameJa;
+        });
         if (!active) return;
-        setJaChampionNames(jaByChampionKey);
+        setIconPatch(payload.patch ?? "");
+        setChampionIdByKey(nextIdByKey);
+        setJaChampionNames(nextJaByKey);
       } catch {
-        // Keep English champion labels if external localization fetch fails.
+        // Keep text-only picker labels/icons when metadata endpoint is unavailable.
       }
     };
 
-    void loadJapaneseChampionNames();
+    void loadChampionMetadata();
     return () => {
       active = false;
     };
-  }, [language, jaChampionNames]);
+  }, [championIdByKey, jaChampionNames, iconPatch]);
 
   const championLabel = useCallback(
     (championName: string): string => {
@@ -209,6 +225,19 @@ export default function App() {
     },
     [language, jaChampionNames]
   );
+
+  const championIconUrl = useCallback(
+    (championName: string): string => {
+      if (!iconPatch) return "";
+      const key = championNameKey(championName);
+      const championId = championIdByKey[key];
+      if (!championId) return "";
+      return `https://ddragon.leagueoflegends.com/cdn/${iconPatch}/img/champion/${championId}.png`;
+    },
+    [iconPatch, championIdByKey]
+  );
+
+  const pickerNoResultsLabel = language === "ja" ? "該当するチャンピオンがありません。" : "No champions found.";
 
   useEffect(() => {
     let active = true;
@@ -417,49 +446,45 @@ export default function App() {
             <div className="botlane-grid">
             <section className="card botlane-side">
               <h3>{copy.form.allyBotlane}</h3>
-              <label>
-                {copy.form.roles.adc}
-                <select value={playerChampion} onChange={(e) => setPlayerChampion(e.target.value)}>
-                  {primaryChampions.map((champion) => (
-                    <option key={champion} value={champion}>
-                      {championLabel(champion)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                {copy.form.roles.support}
-                <select value={playerChampionPartner} onChange={(e) => setPlayerChampionPartner(e.target.value)}>
-                  {partnerChampions.map((champion) => (
-                    <option key={champion} value={champion}>
-                      {championLabel(champion)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <ChampionPicker
+                label={copy.form.roles.adc}
+                value={playerChampion}
+                options={primaryChampions}
+                onChange={setPlayerChampion}
+                getLabel={championLabel}
+                getIconUrl={championIconUrl}
+                noResultsLabel={pickerNoResultsLabel}
+              />
+              <ChampionPicker
+                label={copy.form.roles.support}
+                value={playerChampionPartner}
+                options={partnerChampions}
+                onChange={setPlayerChampionPartner}
+                getLabel={championLabel}
+                getIconUrl={championIconUrl}
+                noResultsLabel={pickerNoResultsLabel}
+              />
             </section>
             <section className="card botlane-side">
               <h3>{copy.form.enemyBotlane}</h3>
-              <label>
-                {copy.form.roles.adc}
-                <select value={enemyChampion} onChange={(e) => setEnemyChampion(e.target.value)}>
-                  {enemyOptions.map((champion) => (
-                    <option key={champion} value={champion}>
-                      {championLabel(champion)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                {copy.form.roles.support}
-                <select value={enemyChampionPartner} onChange={(e) => setEnemyChampionPartner(e.target.value)}>
-                  {enemyPartnerOptions.map((champion) => (
-                    <option key={champion} value={champion}>
-                      {championLabel(champion)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <ChampionPicker
+                label={copy.form.roles.adc}
+                value={enemyChampion}
+                options={enemyOptions}
+                onChange={setEnemyChampion}
+                getLabel={championLabel}
+                getIconUrl={championIconUrl}
+                noResultsLabel={pickerNoResultsLabel}
+              />
+              <ChampionPicker
+                label={copy.form.roles.support}
+                value={enemyChampionPartner}
+                options={enemyPartnerOptions}
+                onChange={setEnemyChampionPartner}
+                getLabel={championLabel}
+                getIconUrl={championIconUrl}
+                noResultsLabel={pickerNoResultsLabel}
+              />
             </section>
             </div>
           </>
@@ -467,29 +492,27 @@ export default function App() {
           <div className="botlane-grid">
             <section className="card botlane-side">
               <h3>{formatTemplate(copy.form.allyLane, { lane: copy.form.lanes[selectedLane] })}</h3>
-              <label>
-                {copy.form.champion}
-                <select value={playerChampion} onChange={(e) => setPlayerChampion(e.target.value)}>
-                  {primaryChampions.map((champion) => (
-                    <option key={champion} value={champion}>
-                      {championLabel(champion)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <ChampionPicker
+                label={copy.form.champion}
+                value={playerChampion}
+                options={primaryChampions}
+                onChange={setPlayerChampion}
+                getLabel={championLabel}
+                getIconUrl={championIconUrl}
+                noResultsLabel={pickerNoResultsLabel}
+              />
             </section>
             <section className="card botlane-side">
               <h3>{formatTemplate(copy.form.enemyLane, { lane: copy.form.lanes[selectedLane] })}</h3>
-              <label>
-                {copy.form.champion}
-                <select value={enemyChampion} onChange={(e) => setEnemyChampion(e.target.value)}>
-                  {enemyOptions.map((champion) => (
-                    <option key={champion} value={champion}>
-                      {championLabel(champion)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <ChampionPicker
+                label={copy.form.champion}
+                value={enemyChampion}
+                options={enemyOptions}
+                onChange={setEnemyChampion}
+                getLabel={championLabel}
+                getIconUrl={championIconUrl}
+                noResultsLabel={pickerNoResultsLabel}
+              />
             </section>
           </div>
         )}

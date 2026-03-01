@@ -84,6 +84,15 @@ interface GeminiCoachServiceOptions {
 }
 type CoachLanguage = "en" | "ja";
 
+function formatSpellFacts(facts: ChampionFacts | null | undefined): string {
+  if (!facts) return "unavailable";
+  const parts = facts.spellFacts
+    .slice(0, 4)
+    .map((spell) => `${spell.slot}:${spell.displayNameEn}[${spell.roles.join("|")}]`);
+  if (parts.length === 0) return "unavailable";
+  return parts.join(", ");
+}
+
 export interface GeminiStatus {
   configured: boolean;
   model: string;
@@ -99,6 +108,8 @@ export interface GeminiAdviceResult {
   botlaneAdvice?: GeminiBotEnemyAdvice;
   failureReason?: string;
 }
+
+type AllInTiming = GeminiAdvice["allInWindows"][number]["timing"];
 
 function extractJsonObject(raw: string): string {
   const trimmed = raw.trim();
@@ -128,6 +139,25 @@ function cleanLine(value: string): string {
 
 function clip(value: string, max: number): string {
   return value.length <= max ? value : value.slice(0, max).trim();
+}
+
+function inferAllInTiming(text: string, fallback: AllInTiming): AllInTiming {
+  const normalized = text.toLowerCase();
+  if (/\b(?:level|lvl?|lv)\s*[_\-\.\s]?\s*2\b|レベル\s*2|2\s*レベル/.test(normalized)) return "level_2";
+  if (/\b(?:level|lvl?|lv)\s*[_\-\.\s]?\s*3\b|レベル\s*3|3\s*レベル/.test(normalized)) return "level_3";
+  if (/\b(?:level|lvl?|lv)\s*[_\-\.\s]?\s*6\b|レベル\s*6|6\s*レベル/.test(normalized)) return "level_6";
+  if (/\bfirst\s*item\b|1st\s*item|初手アイテム|1コア目|最初のアイテム/.test(normalized)) return "first_item";
+  if (/\bmisstep\b|\boverstep\b|\bpositioning error\b|立ち位置ミス|位置ミス|ミスした時/.test(normalized)) {
+    return "enemy_misstep";
+  }
+  return fallback;
+}
+
+function stripTimingPrefix(value: string): string {
+  return value
+    .replace(/^\s*(?:level|lvl?|lv)\s*[_\-\.\s]?\s*(?:2|3|6)\s*[:：\-]\s*/i, "")
+    .replace(/^\s*レベル\s*(?:2|3|6)\s*[:：\-]\s*/i, "")
+    .trim();
 }
 
 function normalizeFromPlainText(raw: string, language: CoachLanguage = "en"): GeminiAdvice | null {
@@ -161,8 +191,11 @@ function normalizeFromPlainText(raw: string, language: CoachLanguage = "en"): Ge
     level1to3Rules: rules.slice(0, 5),
     allInWindows: [
       {
-        timing: "level_3",
-        signal: clip(bullets[3] ?? (isJa ? "敵の主要防御スキルがない。" : "Enemy key defensive cooldown is down."), 160),
+        timing: inferAllInTiming(bullets[3] ?? "", "level_3"),
+        signal: clip(
+          stripTimingPrefix(bullets[3] ?? (isJa ? "敵の主要防御スキルがない。" : "Enemy key defensive cooldown is down.")),
+          160
+        ),
         action: clip(
           isJa
             ? "短く仕掛けてダメージ交換したら、反撃される前に下がる。"
@@ -172,9 +205,11 @@ function normalizeFromPlainText(raw: string, language: CoachLanguage = "en"): Ge
         isFallbackAction: true
       },
       {
-        timing: "level_6",
+        timing: inferAllInTiming(bullets[4] ?? "", "level_6"),
         signal: clip(
-          bullets[4] ?? (isJa ? "敵HPが70%以下で、ウェーブ位置が有利。" : "Enemy HP is below 70% and wave is favorable."),
+          stripTimingPrefix(
+            bullets[4] ?? (isJa ? "敵HPが70%以下で、ウェーブ位置が有利。" : "Enemy HP is below 70% and wave is favorable.")
+          ),
           160
         ),
         action: clip(
@@ -228,9 +263,10 @@ function normalizeAdvice(input: GeminiAdviceRaw, language: CoachLanguage = "en")
     .map((window, idx) => {
       if (typeof window === "string") {
         const cleaned = cleanLine(window);
+        const inferredTiming = inferAllInTiming(cleaned, idx === 0 ? ("level_3" as const) : ("level_6" as const));
         return {
-          timing: idx === 0 ? ("level_3" as const) : ("level_6" as const),
-          signal: clip(cleaned, 160),
+          timing: inferredTiming,
+          signal: clip(stripTimingPrefix(cleaned), 160),
           action: clip(
             isJa
               ? "短く仕掛け、敵のクールダウンが戻る前に下がる。"
@@ -240,10 +276,13 @@ function normalizeAdvice(input: GeminiAdviceRaw, language: CoachLanguage = "en")
           isFallbackAction: true
         };
       }
+      const cleanedSignal = stripTimingPrefix(cleanLine(window.signal));
+      const cleanedAction = stripTimingPrefix(cleanLine(window.action));
+      const inferredTiming = inferAllInTiming(`${cleanedSignal} ${cleanedAction}`, window.timing);
       return {
-        timing: window.timing,
-        signal: clip(cleanLine(window.signal), 160),
-        action: clip(cleanLine(window.action), 220),
+        timing: inferredTiming,
+        signal: clip(cleanedSignal, 160),
+        action: clip(cleanedAction, 220),
         isFallbackAction: false
       };
     })
@@ -531,16 +570,16 @@ export class GeminiCoachService {
       : "partner stats unavailable";
     const championFactsBlock = [
       input.championFacts?.playerFacts
-        ? `playerChampionFacts={name:${input.championFacts.playerFacts.displayNameEn}, resourceType:${input.championFacts.playerFacts.resourceType}}`
+        ? `playerChampionFacts={name:${input.championFacts.playerFacts.displayNameEn}, resourceType:${input.championFacts.playerFacts.resourceType}, spells:${formatSpellFacts(input.championFacts.playerFacts)}}`
         : "playerChampionFacts=unavailable",
       input.championFacts?.enemyFacts
-        ? `enemyChampionFacts={name:${input.championFacts.enemyFacts.displayNameEn}, resourceType:${input.championFacts.enemyFacts.resourceType}}`
+        ? `enemyChampionFacts={name:${input.championFacts.enemyFacts.displayNameEn}, resourceType:${input.championFacts.enemyFacts.resourceType}, spells:${formatSpellFacts(input.championFacts.enemyFacts)}}`
         : "enemyChampionFacts=unavailable",
       input.championFacts?.playerPartnerFacts
-        ? `playerPartnerFacts={name:${input.championFacts.playerPartnerFacts.displayNameEn}, resourceType:${input.championFacts.playerPartnerFacts.resourceType}}`
+        ? `playerPartnerFacts={name:${input.championFacts.playerPartnerFacts.displayNameEn}, resourceType:${input.championFacts.playerPartnerFacts.resourceType}, spells:${formatSpellFacts(input.championFacts.playerPartnerFacts)}}`
         : "playerPartnerFacts=unavailable",
       input.championFacts?.enemyPartnerFacts
-        ? `enemyPartnerFacts={name:${input.championFacts.enemyPartnerFacts.displayNameEn}, resourceType:${input.championFacts.enemyPartnerFacts.resourceType}}`
+        ? `enemyPartnerFacts={name:${input.championFacts.enemyPartnerFacts.displayNameEn}, resourceType:${input.championFacts.enemyPartnerFacts.resourceType}, spells:${formatSpellFacts(input.championFacts.enemyPartnerFacts)}}`
         : "enemyPartnerFacts=unavailable"
     ].join("\n");
     const prompt = `
@@ -558,6 +597,7 @@ Constraints:
 - if there is no meaningful rune change, return empty strings in runeAdjustments fields
 - champion facts are authoritative; do not contradict them
 - never discuss mana management for champions with resourceType other than mana
+- do not call a spell a disengage tool unless that spell is explicitly tagged with role "disengage"
 ${outputLanguageInstruction}
 
 Matchup:
@@ -660,6 +700,7 @@ Write role-specific advice from the player's perspective.
 Keep each value practical and concise (1 sentence each).
 Champion facts are authoritative; do not contradict them.
 Never discuss mana management for champions with resourceType other than mana.
+Do not call a spell a disengage tool unless that spell is explicitly tagged with role "disengage".
 ${championFactsBlock}
 ${outputLanguageInstruction}
 `.trim();

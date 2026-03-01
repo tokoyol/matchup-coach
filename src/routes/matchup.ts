@@ -152,6 +152,28 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       });
     }
 
+    if (championFactsService) {
+      try {
+        const metadata = await championFactsService.getFactsByKey();
+        const names: Record<string, string> = {};
+        Object.entries(metadata.factsByKey).forEach(([key, facts]) => {
+          names[key] = facts.displayNameJa;
+        });
+        return res.json({
+          language: "ja",
+          patch: metadata.patch,
+          names
+        });
+      } catch (error) {
+        return res.status(200).json({
+          language: "ja",
+          patch: currentPatch,
+          names: {},
+          warning: error instanceof Error ? error.message : "Failed to load champion localization."
+        });
+      }
+    }
+
     const now = Date.now();
     if (cachedJaChampionLocalization && now - cachedJaChampionLocalization.fetchedAt < CHAMPION_LOCALIZATION_CACHE_TTL_MS) {
       return res.json({
@@ -179,6 +201,37 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         patch: currentPatch,
         names: {},
         warning: error instanceof Error ? error.message : "Failed to load champion localization."
+      });
+    }
+  });
+
+  router.get("/champion-metadata", async (_req, res) => {
+    if (!championFactsService) {
+      return res.status(503).json({
+        error: "Champion facts service unavailable."
+      });
+    }
+    try {
+      const metadata = await championFactsService.getFactsByKey();
+      const championsByKey = Object.fromEntries(
+        Object.entries(metadata.factsByKey).map(([key, facts]) => [
+          key,
+          {
+            championId: facts.championId,
+            canonicalName: facts.canonicalName,
+            displayNameEn: facts.displayNameEn,
+            displayNameJa: facts.displayNameJa
+          }
+        ])
+      );
+      return res.json({
+        patch: metadata.patch,
+        championsByKey
+      });
+    } catch (error) {
+      return res.status(500).json({
+        error: "Failed to load champion metadata.",
+        message: error instanceof Error ? error.message : "Unknown error"
       });
     }
   });

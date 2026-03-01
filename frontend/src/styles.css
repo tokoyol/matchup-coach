@@ -271,3 +271,134 @@ ul {
   color: #ff9b9b;
   margin: 0;
 }
+
+.champion-picker {
+  position: relative;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.champion-picker-label {
+  font-size: 0.95rem;
+}
+
+.champion-picker-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  text-align: left;
+}
+
+.champion-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  object-fit: cover;
+  border: 1px solid #3a4f65;
+  flex-shrink: 0;
+}
+
+.champion-icon.loading {
+  opacity: 0;
+}
+
+.champion-icon-frame {
+  width: 22px;
+  height: 22px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.champion-icon-skeleton {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid #2f4154;
+  background: #1a2633;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.champion-icon-skeleton.pulse {
+  position: absolute;
+  top: 0;
+  left: 0;
+  animation: championIconPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes championIconPulse {
+  0% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0.6;
+  }
+}
+
+.champion-picker-popover {
+  position: absolute;
+  z-index: 20;
+  width: 100%;
+  margin-top: 0.1rem;
+  border: 1px solid #2e4358;
+  border-radius: 10px;
+  background: #0f1822;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 0.45rem;
+}
+
+.champion-picker-search {
+  width: 100%;
+  border: 1px solid #36506b;
+  border-radius: 8px;
+  background: #0b141d;
+  color: #e8edf3;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.9rem;
+}
+
+.champion-picker-options {
+  list-style: none;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  max-height: 280px;
+  overflow: auto;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.champion-picker-option {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #e8edf3;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.42rem 0.5rem;
+  cursor: pointer;
+}
+
+.champion-picker-option.highlighted {
+  background: #162636;
+  border-color: #35516c;
+}
+
+.champion-picker-option.selected {
+  background: #1a2c3f;
+  border-color: #3d6284;
+}
+
+.champion-picker-empty {
+  color: #9fb0c2;
+  font-size: 0.88rem;
+  padding: 0.35rem 0.45rem;
+}
