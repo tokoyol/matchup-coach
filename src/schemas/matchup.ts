@@ -49,7 +49,8 @@ export const coachMatchupRequestSchema = z
 const allInWindowSchema = z.object({
   timing: z.enum(["level_2", "level_3", "level_6", "first_item", "enemy_misstep"]),
   signal: z.string().min(4).max(160),
-  action: z.string().min(4).max(220)
+  action: z.string().min(4).max(220),
+  isFallbackAction: z.boolean().optional()
 });
 
 const botEnemyAdviceSchema = z.object({

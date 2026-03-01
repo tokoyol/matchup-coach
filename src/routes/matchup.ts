@@ -9,6 +9,7 @@ import {
 } from "../data/champions.js";
 import { coachMatchupRequestSchema, coachMatchupResponseSchema } from "../schemas/matchup.js";
 import { generateMatchupCoaching } from "../services/coachService.js";
+import { ChampionFactsService } from "../services/championFactsService.js";
 import type { ExternalMatchupStatsProvider } from "../services/externalMatchupStatsProvider.js";
 import { GeminiCoachService } from "../services/geminiCoachService.js";
 import type { MatchupStatsStore } from "../services/matchupStatsStore.js";
@@ -126,6 +127,7 @@ interface CreateMatchupRouterOptions {
   statsRepository?: MatchupStatsStore;
   externalStatsProvider?: ExternalMatchupStatsProvider;
   geminiCoachService?: GeminiCoachService;
+  championFactsService?: ChampionFactsService;
 }
 
 export function createMatchupRouter(options: CreateMatchupRouterOptions): Router {
@@ -134,7 +136,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
     minSampleGames,
     statsRepository,
     externalStatsProvider,
-    geminiCoachService
+    geminiCoachService,
+    championFactsService
   } = options;
   const requiredSampleGames = Math.max(1, Math.floor(minSampleGames ?? 10));
   const router = Router();
@@ -279,6 +282,33 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
               enemySupport: parseInput.data.enemyChampionPartner
             }
           : undefined;
+      let factsWarning = "";
+      let championFacts:
+        | {
+            playerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
+            enemyFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
+            playerPartnerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
+            enemyPartnerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
+          }
+        | undefined;
+      if (championFactsService) {
+        try {
+          const [playerFacts, enemyFacts, playerPartnerFacts, enemyPartnerFacts] = await Promise.all([
+            championFactsService.getChampionFacts(parseInput.data.playerChampion),
+            championFactsService.getChampionFacts(parseInput.data.enemyChampion),
+            championFactsService.getChampionFacts(parseInput.data.playerChampionPartner ?? ""),
+            championFactsService.getChampionFacts(parseInput.data.enemyChampionPartner ?? "")
+          ]);
+          championFacts = {
+            playerFacts,
+            enemyFacts,
+            playerPartnerFacts,
+            enemyPartnerFacts
+          };
+        } catch (error) {
+          factsWarning = error instanceof Error ? error.message : "Champion facts lookup failed.";
+        }
+      }
       if (statsRepository) {
         if (lane === "bot") {
           const [adcStats, supportStats] = await Promise.all([
@@ -452,7 +482,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             effectiveGames: currentSampleSize
           },
           externalSource: externalSourceMeta,
-          botlaneContexts
+          botlaneContexts,
+          championFacts
         }
       );
       if (usedExternalProvider) {
@@ -480,6 +511,16 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             language === "ja"
               ? `現在パッチ(${requestedPatch})のサンプルが不足しているため、前パッチ(${resolvedPatch})のデータを使用しています。`
               : `Current patch (${requestedPatch}) has limited samples; using previous patch (${resolvedPatch}) data.`
+          ),
+          ...coaching.meta.warnings
+        ];
+      }
+      if (factsWarning) {
+        coaching.meta.warnings = [
+          clampWarning(
+            language === "ja"
+              ? `チャンピオン情報の取得に失敗しました: ${factsWarning}`
+              : `Champion facts lookup failed: ${factsWarning}`
           ),
           ...coaching.meta.warnings
         ];

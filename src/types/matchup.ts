@@ -25,6 +25,7 @@ export interface AllInWindow {
   timing: AllInTiming;
   signal: string;
   action: string;
+  isFallbackAction?: boolean;
 }
 
 export interface RuneAdjustments {

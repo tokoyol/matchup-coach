@@ -1,9 +1,17 @@
 import type { CoachMatchupRequestInput, CoachMatchupResponseOutput } from "../schemas/matchup.js";
 import { CHAMPION_TAGS } from "../data/champions.js";
 import type { MatchupStats } from "../types/stats.js";
+import type { ChampionFacts } from "./championFactsService.js";
 import { GeminiCoachService } from "./geminiCoachService.js";
 
 type CoachLanguage = "en" | "ja";
+
+interface ChampionFactsBundle {
+  playerFacts?: ChampionFacts | null;
+  enemyFacts?: ChampionFacts | null;
+  playerPartnerFacts?: ChampionFacts | null;
+  enemyPartnerFacts?: ChampionFacts | null;
+}
 
 const KEYSTONE_NAMES: Record<number, string> = {
   8005: "Press the Attack",
@@ -221,24 +229,28 @@ function enforceAdviceStructure(
           {
             timing: "level_3" as const,
             signal: "敵が移動または防御スキルを使って波を触ったとき。",
-            action: "すぐ前に出て短く仕掛け、返しを受ける前に離脱する。"
+            action: "すぐ前に出て短く仕掛け、返しを受ける前に離脱する。",
+            isFallbackAction: true
           },
           {
             timing: "level_6" as const,
             signal: "敵HPが70%以下で、ウェーブ位置が自陣寄りのとき。",
-            action: "フルコンボを通し、仕留め用の主要スキルを1つ温存する。"
+            action: "フルコンボを通し、仕留め用の主要スキルを1つ温存する。",
+            isFallbackAction: true
           }
         ]
       : [
           {
             timing: "level_3" as const,
             signal: "Enemy uses mobility or a defensive cooldown for wave control.",
-            action: "Step up for a short commit trade, then disengage before return damage."
+            action: "Step up for a short commit trade, then disengage before return damage.",
+            isFallbackAction: true
           },
           {
             timing: "level_6" as const,
             signal: "Enemy HP drops below 70% with a favorable wave position.",
-            action: "Commit full combo and hold one key spell for secure finish."
+            action: "Commit full combo and hold one key spell for secure finish.",
+            isFallbackAction: true
           }
         ];
 
@@ -273,6 +285,110 @@ function enforceAdviceStructure(
     level1to3Rules: dedupedRules.slice(0, 5),
     allInWindows: dedupedWindows
   };
+}
+
+function applyFactGuardToLine(
+  line: string,
+  nonManaFacts: ChampionFacts[],
+  language: CoachLanguage
+): { value: string; changed: boolean } {
+  const manaPattern = /\b(?:mana|oom|out of mana|mana-hungry|mana hungry)\b|マナ/i;
+  if (!manaPattern.test(line)) {
+    return { value: line, changed: false };
+  }
+
+  const normalizedLine = normalizeContentKey(line);
+  const matchingFact = nonManaFacts.find((facts) => {
+    const enName = normalizeContentKey(facts.displayNameEn);
+    const jaName = normalizeContentKey(facts.displayNameJa);
+    const canonical = normalizeContentKey(facts.canonicalName);
+    return (
+      (enName.length > 0 && normalizedLine.includes(enName)) ||
+      (jaName.length > 0 && normalizedLine.includes(jaName)) ||
+      (canonical.length > 0 && normalizedLine.includes(canonical))
+    );
+  });
+
+  if (!matchingFact) {
+    return { value: line, changed: false };
+  }
+
+  const championName = language === "ja" ? matchingFact.displayNameJa : matchingFact.displayNameEn;
+  const replacement =
+    language === "ja"
+      ? `${championName}はマナ系リソースを使わないため、マナ管理ではなく体力・クールダウン・ウェーブ位置を重視する。`
+      : `${championName} does not use mana resources, so focus on health, cooldowns, and wave position instead of mana management.`;
+  return { value: replacement, changed: true };
+}
+
+function enforceChampionFactConsistency(
+  advice: Pick<
+    CoachMatchupResponseOutput,
+    "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
+  >,
+  botlaneAdvice: CoachMatchupResponseOutput["botlaneAdvice"],
+  facts: ChampionFactsBundle | undefined,
+  language: CoachLanguage
+): {
+  advice: Pick<
+    CoachMatchupResponseOutput,
+    "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
+  >;
+  botlaneAdvice: CoachMatchupResponseOutput["botlaneAdvice"];
+  interventionCount: number;
+} {
+  const nonManaFacts = [
+    facts?.playerFacts,
+    facts?.enemyFacts,
+    facts?.playerPartnerFacts,
+    facts?.enemyPartnerFacts
+  ].filter((factsEntry): factsEntry is ChampionFacts => Boolean(factsEntry && factsEntry.resourceType !== "mana"));
+  if (nonManaFacts.length === 0) {
+    return { advice, botlaneAdvice, interventionCount: 0 };
+  }
+
+  let interventionCount = 0;
+  const scrub = (line: string): string => {
+    const next = applyFactGuardToLine(line, nonManaFacts, language);
+    if (next.changed) interventionCount += 1;
+    return next.value;
+  };
+
+  const nextAdvice = {
+    ...advice,
+    earlyGamePlan: scrub(advice.earlyGamePlan),
+    level1to3Rules: advice.level1to3Rules.map((line) => scrub(line)),
+    allInWindows: advice.allInWindows.map((window) => ({
+      ...window,
+      signal: scrub(window.signal),
+      action: scrub(window.action)
+    })),
+    commonMistakes: advice.commonMistakes.map((line) => scrub(line)) as [string, string, string]
+  };
+
+  if (!botlaneAdvice) {
+    return { advice: nextAdvice, botlaneAdvice, interventionCount };
+  }
+
+  const nextBotlaneAdvice: NonNullable<CoachMatchupResponseOutput["botlaneAdvice"]> = {
+    ...botlaneAdvice,
+    vsEnemyAdc: {
+      ...botlaneAdvice.vsEnemyAdc,
+      threatPattern: scrub(botlaneAdvice.vsEnemyAdc.threatPattern),
+      spacingRule: scrub(botlaneAdvice.vsEnemyAdc.spacingRule),
+      punishWindow: scrub(botlaneAdvice.vsEnemyAdc.punishWindow),
+      commonTrap: scrub(botlaneAdvice.vsEnemyAdc.commonTrap)
+    },
+    vsEnemySupport: {
+      ...botlaneAdvice.vsEnemySupport,
+      threatPattern: scrub(botlaneAdvice.vsEnemySupport.threatPattern),
+      spacingRule: scrub(botlaneAdvice.vsEnemySupport.spacingRule),
+      punishWindow: scrub(botlaneAdvice.vsEnemySupport.punishWindow),
+      commonTrap: scrub(botlaneAdvice.vsEnemySupport.commonTrap)
+    }
+  };
+
+  return { advice: nextAdvice, botlaneAdvice: nextBotlaneAdvice, interventionCount };
 }
 
 function sanitizeAdviceMechanics(
@@ -404,6 +520,7 @@ export async function generateMatchupCoaching(
       enemyAdc: string;
       enemySupport: string;
     };
+    championFacts?: ChampionFactsBundle;
   }
 ): Promise<CoachMatchupResponseOutput> {
   const language: CoachLanguage = input.language === "ja" ? "ja" : "en";
@@ -444,7 +561,8 @@ export async function generateMatchupCoaching(
         action:
           language === "ja"
             ? "すぐ前に出て仕掛け、こちらのCD終了に合わせて離脱する。"
-            : "Step up immediately for a commit trade, then disengage on your cooldown end."
+            : "Step up immediately for a commit trade, then disengage on your cooldown end.",
+        isFallbackAction: true
       },
       {
         timing: "level_6" as const,
@@ -455,7 +573,8 @@ export async function generateMatchupCoaching(
         action:
           language === "ja"
             ? "フルコンボを使い、仕留め用に主要スキルを1つ温存する。"
-            : "Use full combo and hold one key spell to secure the kill attempt."
+            : "Use full combo and hold one key spell to secure the kill attempt.",
+        isFallbackAction: true
       }
     ],
     runeAdjustments: fallbackRuneAdjustments(stats, language),
@@ -504,7 +623,8 @@ export async function generateMatchupCoaching(
       enemyTags,
       stats,
       partnerStats,
-      language
+      language,
+      championFacts: options?.championFacts
     });
     const geminiAdvice = geminiResult.advice;
     geminiFailureReason = geminiResult.failureReason ?? "";
@@ -523,6 +643,9 @@ export async function generateMatchupCoaching(
   advice = applyMatchupPriors(input, advice);
   advice = sanitizeAdviceMechanics(advice);
   advice = enforceAdviceStructure(advice, language);
+  const factGuard = enforceChampionFactConsistency(advice, botlaneAdvice, options?.championFacts, language);
+  advice = factGuard.advice;
+  botlaneAdvice = factGuard.botlaneAdvice;
 
   const response: CoachMatchupResponseOutput = {
     matchup: {
@@ -582,6 +705,14 @@ export async function generateMatchupCoaching(
         : language === "ja"
           ? "このリクエストではGeminiアドバイスを利用できないため、フォールバック用コーチングテンプレートを使用しています。"
           : "Gemini advice unavailable for this request; using fallback coaching template.",
+      ...response.meta.warnings
+    ];
+  }
+  if (factGuard.interventionCount > 0) {
+    response.meta.warnings = [
+      language === "ja"
+        ? `事実整合チェックにより${factGuard.interventionCount}件の文言を補正しました。`
+        : `Fact guard corrected ${factGuard.interventionCount} generated line(s).`,
       ...response.meta.warnings
     ];
   }

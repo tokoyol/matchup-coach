@@ -5,6 +5,7 @@ import { env } from "./config/env.js";
 import { getPostgresPool } from "./db/postgres.js";
 import { getDatabase } from "./db/sqlite.js";
 import { LolalyticsScrapeProvider, type ExternalMatchupStatsProvider } from "./services/externalMatchupStatsProvider.js";
+import { ChampionFactsService } from "./services/championFactsService.js";
 import { GeminiCoachService } from "./services/geminiCoachService.js";
 import { MatchupStatsRepository } from "./services/matchupStatsRepository.js";
 import { PostgresMatchupStatsRepository } from "./services/postgresMatchupStatsRepository.js";
@@ -20,6 +21,7 @@ async function bootstrap(): Promise<void> {
   app.use(express.json());
 
   let externalStatsProvider: ExternalMatchupStatsProvider | undefined;
+  const championFactsService = new ChampionFactsService();
   let statsRepository: MatchupStatsStore | undefined;
   if (env.DB_PROVIDER === "postgres") {
     if (!env.DATABASE_URL) {
@@ -73,7 +75,8 @@ async function bootstrap(): Promise<void> {
       minSampleGames: env.MATCHUP_MIN_SAMPLE_GAMES,
       statsRepository,
       externalStatsProvider,
-      geminiCoachService
+      geminiCoachService,
+      championFactsService
     })
   );
 

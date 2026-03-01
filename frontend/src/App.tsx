@@ -39,6 +39,7 @@ interface CoachResponse {
     timing: "level_2" | "level_3" | "level_6" | "first_item" | "enemy_misstep";
     signal: string;
     action: string;
+    isFallbackAction?: boolean;
   }>;
   runeAdjustments: {
     keystone: { recommended: string; reason: string };
@@ -110,12 +111,30 @@ function timingLabel(timing: CoachResponse["allInWindows"][number]["timing"], la
 }
 
 function isGenericAllInAction(action: string): boolean {
-  const normalized = action.trim().toLowerCase();
-  return (
-    normalized === "take a short commit trade and disengage before return damage." ||
-    normalized === "use full combo and hold one key spell to secure the kill attempt." ||
-    normalized === "take a short commit trade and disengage if the enemy cooldowns return."
-  );
+  const normalized = action
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ");
+  const exactTemplates = new Set([
+    "take a short commit trade and disengage before return damage",
+    "use full combo and hold one key spell to secure the kill attempt",
+    "take a short commit trade and disengage if the enemy cooldowns return",
+    "commit full combo with spacing and hold one spell for finish",
+    "take a short commit trade and disengage after your combo",
+    "commit full combo and hold one key spell for secure finish"
+  ]);
+  if (exactTemplates.has(normalized)) return true;
+
+  // Catch slight phrasing drift from fallback templates.
+  const isShortTradeTemplate =
+    normalized.includes("short commit trade") &&
+    (normalized.includes("disengage") || normalized.includes("return damage"));
+  const isFullComboTemplate =
+    normalized.includes("full combo") &&
+    normalized.includes("hold one") &&
+    normalized.includes("spell");
+  return isShortTradeTemplate || isFullComboTemplate;
 }
 
 function hasRuneAdjustment(result: CoachResponse): boolean {
@@ -603,7 +622,7 @@ export default function App() {
               {result.allInWindows.map((window) => (
                 <li key={`${window.timing}-${window.signal}`}>
                   <strong>{timingLabel(window.timing, language)}:</strong> {window.signal}
-                  {!isGenericAllInAction(window.action) ? <> {"->"} {window.action}</> : null}
+                  {!(window.isFallbackAction ?? isGenericAllInAction(window.action)) ? <> {"->"} {window.action}</> : null}
                 </li>
               ))}
             </ul>

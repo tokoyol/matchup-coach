@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { MatchupStats } from "../types/stats.js";
 import type { CoachLane } from "../data/champions.js";
+import type { ChampionFacts } from "./championFactsService.js";
 
 const allInWindowFlexibleSchema = z.union([
   z.object({
@@ -50,6 +51,7 @@ export interface GeminiAdvice {
     timing: "level_2" | "level_3" | "level_6" | "first_item" | "enemy_misstep";
     signal: string;
     action: string;
+    isFallbackAction?: boolean;
   }>;
   runeAdjustments: {
     keystone: { recommended: string; reason: string };
@@ -166,7 +168,8 @@ function normalizeFromPlainText(raw: string, language: CoachLanguage = "en"): Ge
             ? "短く仕掛けてダメージ交換したら、反撃される前に下がる。"
             : "Take a short commit trade and disengage before return damage.",
           220
-        )
+        ),
+        isFallbackAction: true
       },
       {
         timing: "level_6",
@@ -177,7 +180,8 @@ function normalizeFromPlainText(raw: string, language: CoachLanguage = "en"): Ge
         action: clip(
           isJa ? "間合いを保ってフルコンボし、とどめ用に1スキルを温存する。" : "Commit full combo with spacing and hold one spell for finish.",
           220
-        )
+        ),
+        isFallbackAction: true
       }
     ],
     runeAdjustments: {
@@ -232,13 +236,15 @@ function normalizeAdvice(input: GeminiAdviceRaw, language: CoachLanguage = "en")
               ? "短く仕掛け、敵のクールダウンが戻る前に下がる。"
               : "Take a short commit trade and disengage if the enemy cooldowns return.",
             220
-          )
+          ),
+          isFallbackAction: true
         };
       }
       return {
         timing: window.timing,
         signal: clip(cleanLine(window.signal), 160),
-        action: clip(cleanLine(window.action), 220)
+        action: clip(cleanLine(window.action), 220),
+        isFallbackAction: false
       };
     })
     .filter((window) => window.signal.length > 0 && window.action.length > 0)
@@ -247,7 +253,8 @@ function normalizeAdvice(input: GeminiAdviceRaw, language: CoachLanguage = "en")
     windows.push({
       timing: windows.length === 0 ? "level_3" : "level_6",
       signal: isJa ? "敵の主要防御スキルが使えない。" : "Enemy key defensive cooldown is unavailable.",
-      action: clip(isJa ? "コンボ後は素早く離脱して被弾を抑える。" : "Take a short commit trade and disengage after your combo.", 220)
+      action: clip(isJa ? "コンボ後は素早く離脱して被弾を抑える。" : "Take a short commit trade and disengage after your combo.", 220),
+      isFallbackAction: true
     });
   }
 
@@ -504,6 +511,12 @@ export class GeminiCoachService {
     stats?: MatchupStats | null;
     partnerStats?: MatchupStats | null;
     language?: CoachLanguage;
+    championFacts?: {
+      playerFacts?: ChampionFacts | null;
+      enemyFacts?: ChampionFacts | null;
+      playerPartnerFacts?: ChampionFacts | null;
+      enemyPartnerFacts?: ChampionFacts | null;
+    };
   }): Promise<GeminiAdviceResult> {
     const language: CoachLanguage = input.language === "ja" ? "ja" : "en";
     const outputLanguageInstruction =
@@ -516,6 +529,20 @@ export class GeminiCoachService {
     const partnerStatsBlock = input.partnerStats
       ? `games=${input.partnerStats.games}, winRate=${input.partnerStats.winRate}, goldDiff15=${input.partnerStats.goldDiff15}, pre6KillRate=${input.partnerStats.pre6KillRate}, earlyDeathRate=${input.partnerStats.earlyDeathRate}`
       : "partner stats unavailable";
+    const championFactsBlock = [
+      input.championFacts?.playerFacts
+        ? `playerChampionFacts={name:${input.championFacts.playerFacts.displayNameEn}, resourceType:${input.championFacts.playerFacts.resourceType}}`
+        : "playerChampionFacts=unavailable",
+      input.championFacts?.enemyFacts
+        ? `enemyChampionFacts={name:${input.championFacts.enemyFacts.displayNameEn}, resourceType:${input.championFacts.enemyFacts.resourceType}}`
+        : "enemyChampionFacts=unavailable",
+      input.championFacts?.playerPartnerFacts
+        ? `playerPartnerFacts={name:${input.championFacts.playerPartnerFacts.displayNameEn}, resourceType:${input.championFacts.playerPartnerFacts.resourceType}}`
+        : "playerPartnerFacts=unavailable",
+      input.championFacts?.enemyPartnerFacts
+        ? `enemyPartnerFacts={name:${input.championFacts.enemyPartnerFacts.displayNameEn}, resourceType:${input.championFacts.enemyPartnerFacts.resourceType}}`
+        : "enemyPartnerFacts=unavailable"
+    ].join("\n");
     const prompt = `
 You are a League of Legends ${input.lane}-lane coach for Iron-Gold.
 Respond ONLY as valid JSON object with keys:
@@ -529,6 +556,8 @@ Constraints:
 - commonMistakes: exactly 3 strings
 - keep tone concise and action-oriented
 - if there is no meaningful rune change, return empty strings in runeAdjustments fields
+- champion facts are authoritative; do not contradict them
+- never discuss mana management for champions with resourceType other than mana
 ${outputLanguageInstruction}
 
 Matchup:
@@ -544,6 +573,7 @@ playerTags=${input.playerTags.join(",")}
 enemyTags=${input.enemyTags.join(",")}
 stats=${statsBlock}
 partnerStats=${partnerStatsBlock}
+${championFactsBlock}
 `.trim();
 
     const normalizedModel = this.getNormalizedModel();
@@ -628,6 +658,9 @@ Each key is an object with exactly:
 
 Write role-specific advice from the player's perspective.
 Keep each value practical and concise (1 sentence each).
+Champion facts are authoritative; do not contradict them.
+Never discuss mana management for champions with resourceType other than mana.
+${championFactsBlock}
 ${outputLanguageInstruction}
 `.trim();
         const botResponse = await this.fetchWithTimeout(
