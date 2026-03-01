@@ -176,6 +176,105 @@ function sanitizeMechanicsLine(line: string): string {
   return next;
 }
 
+function normalizeContentKey(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\u3040-\u30ff\u3400-\u9fff]/g, "")
+    .trim();
+}
+
+function isNearDuplicateContent(a: string, b: string): boolean {
+  const left = normalizeContentKey(a);
+  const right = normalizeContentKey(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (left.length >= 28 && right.includes(left.slice(0, 28))) return true;
+  if (right.length >= 28 && left.includes(right.slice(0, 28))) return true;
+  return false;
+}
+
+function enforceAdviceStructure(
+  advice: Pick<
+    CoachMatchupResponseOutput,
+    "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
+  >,
+  language: CoachLanguage
+): Pick<
+  CoachMatchupResponseOutput,
+  "earlyGamePlan" | "level1to3Rules" | "allInWindows" | "runeAdjustments" | "commonMistakes"
+> {
+  const fallbackRules =
+    language === "ja"
+      ? [
+          "レベル1の主導権を争うか、プッシュを譲るかを事前に決める。",
+          "レベル2先行とミニオン有利を確認してからトレードする。",
+          "敵の主要スキル後に短いトレードを重ねる。"
+        ]
+      : [
+          "Decide before lane whether to contest level 1 or concede push.",
+          "Track level 2 race and trade only with minion advantage.",
+          "Take short trades after enemy key cooldowns are used."
+        ];
+  const fallbackWindows =
+    language === "ja"
+      ? [
+          {
+            timing: "level_3" as const,
+            signal: "敵が移動または防御スキルを使って波を触ったとき。",
+            action: "すぐ前に出て短く仕掛け、返しを受ける前に離脱する。"
+          },
+          {
+            timing: "level_6" as const,
+            signal: "敵HPが70%以下で、ウェーブ位置が自陣寄りのとき。",
+            action: "フルコンボを通し、仕留め用の主要スキルを1つ温存する。"
+          }
+        ]
+      : [
+          {
+            timing: "level_3" as const,
+            signal: "Enemy uses mobility or a defensive cooldown for wave control.",
+            action: "Step up for a short commit trade, then disengage before return damage."
+          },
+          {
+            timing: "level_6" as const,
+            signal: "Enemy HP drops below 70% with a favorable wave position.",
+            action: "Commit full combo and hold one key spell for secure finish."
+          }
+        ];
+
+  const plan = advice.earlyGamePlan.trim();
+  const dedupedRules = advice.level1to3Rules
+    .map((rule) => rule.trim())
+    .filter((rule) => rule.length >= 8 && rule.length <= 160)
+    .filter((rule) => !isNearDuplicateContent(rule, plan))
+    .filter((rule, idx, arr) => arr.findIndex((entry) => isNearDuplicateContent(entry, rule)) === idx);
+
+  while (dedupedRules.length < 3) {
+    dedupedRules.push(fallbackRules[dedupedRules.length]);
+  }
+
+  const dedupedWindows = advice.allInWindows
+    .map((window) => ({
+      ...window,
+      signal: window.signal.trim(),
+      action: window.action.trim()
+    }))
+    .filter((window) => window.signal.length >= 8 && window.action.length >= 8)
+    .filter((window) => !isNearDuplicateContent(window.signal, plan))
+    .filter((window) => !isNearDuplicateContent(window.action, plan))
+    .slice(0, 5);
+
+  while (dedupedWindows.length < 2) {
+    dedupedWindows.push(fallbackWindows[dedupedWindows.length]);
+  }
+
+  return {
+    ...advice,
+    level1to3Rules: dedupedRules.slice(0, 5),
+    allInWindows: dedupedWindows
+  };
+}
+
 function sanitizeAdviceMechanics(
   advice: Pick<
     CoachMatchupResponseOutput,
@@ -423,6 +522,7 @@ export async function generateMatchupCoaching(
 
   advice = applyMatchupPriors(input, advice);
   advice = sanitizeAdviceMechanics(advice);
+  advice = enforceAdviceStructure(advice, language);
 
   const response: CoachMatchupResponseOutput = {
     matchup: {
