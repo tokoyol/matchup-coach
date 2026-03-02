@@ -26,6 +26,17 @@ interface ChampionMetadataResponse {
   >;
 }
 
+interface DDragonVersionsResponse extends Array<string> {}
+interface DDragonChampionListPayload {
+  data: Record<
+    string,
+    {
+      id: string;
+      name: string;
+    }
+  >;
+}
+
 function championNameKey(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -91,8 +102,50 @@ interface CoachResponse {
   };
 }
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim()
+  ? (import.meta.env.VITE_API_BASE_URL as string)
+  : import.meta.env.DEV
+    ? "http://localhost:4000"
+    : window.location.origin;
 const AUTO_REFRESH_INTERVAL_MS = 6000;
+
+async function fetchChampionMetadataFromDDragon(): Promise<ChampionMetadataResponse> {
+  const versionsResponse = await fetch("https://ddragon.leagueoflegends.com/api/versions.json");
+  if (!versionsResponse.ok) {
+    throw new Error(`Failed to load Data Dragon versions (${versionsResponse.status}).`);
+  }
+  const versions = (await versionsResponse.json()) as DDragonVersionsResponse;
+  const patch = versions[0];
+  if (!patch) {
+    throw new Error("Data Dragon returned empty versions.");
+  }
+
+  const [enResponse, jaResponse] = await Promise.all([
+    fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/en_US/champion.json`),
+    fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/ja_JP/champion.json`)
+  ]);
+  if (!enResponse.ok || !jaResponse.ok) {
+    throw new Error(`Failed to load Data Dragon champion metadata (${enResponse.status}/${jaResponse.status}).`);
+  }
+  const [enData, jaData] = (await Promise.all([
+    enResponse.json() as Promise<DDragonChampionListPayload>,
+    jaResponse.json() as Promise<DDragonChampionListPayload>
+  ])) as [DDragonChampionListPayload, DDragonChampionListPayload];
+
+  const championsByKey: ChampionMetadataResponse["championsByKey"] = {};
+  Object.values(enData.data).forEach((enChampion) => {
+    const jaChampion = jaData.data?.[enChampion.id];
+    const model = {
+      championId: enChampion.id,
+      canonicalName: enChampion.name,
+      displayNameEn: enChampion.name,
+      displayNameJa: jaChampion?.name ?? enChampion.name
+    };
+    championsByKey[championNameKey(enChampion.id)] = model;
+    championsByKey[championNameKey(enChampion.name)] = model;
+  });
+  return { patch, championsByKey };
+}
 
 function difficultyLabel(difficulty: Difficulty, language: AppLanguage): string {
   return COPY[language].enums.difficulty[difficulty];
@@ -194,9 +247,18 @@ export default function App() {
     let active = true;
     const loadChampionMetadata = async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/champion-metadata`);
-        if (!response.ok) return;
-        const payload = (await response.json()) as ChampionMetadataResponse;
+        let payload: ChampionMetadataResponse | null = null;
+        try {
+          const response = await fetch(`${API_BASE}/api/champion-metadata`);
+          if (response.ok) {
+            payload = (await response.json()) as ChampionMetadataResponse;
+          }
+        } catch {
+          // Fall through to Data Dragon direct lookup.
+        }
+        if (!payload) {
+          payload = await fetchChampionMetadataFromDDragon();
+        }
         const nextIdByKey: Record<string, string> = {};
         const nextJaByKey: Record<string, string> = {};
         Object.entries(payload.championsByKey ?? {}).forEach(([key, champion]) => {
