@@ -65,6 +65,34 @@ function getPreviousPatch(patch: string): string | null {
   return `${String(major).padStart(2, "0")}.${minor - 1}`;
 }
 
+function invertMatchupPerspective(stats: MatchupStats): MatchupStats {
+  const clampRate = (value: number): number => Math.max(0, Math.min(1, value));
+  return {
+    ...stats,
+    winRate: Number((1 - stats.winRate).toFixed(3)),
+    goldDiff15: Math.round(-stats.goldDiff15),
+    pre6KillRate: Number(clampRate(stats.earlyDeathRate).toFixed(3)),
+    earlyDeathRate: Number(clampRate(stats.pre6KillRate).toFixed(3)),
+    // Rune/item usage in mirrored rows belong to the opposite champion perspective.
+    runeUsage: [],
+    firstItemUsage: []
+  };
+}
+
+async function getStatsWithMirroredFallback(
+  repository: MatchupStatsStore,
+  patch: string,
+  lane: "top" | "jungle" | "mid" | "adc" | "support",
+  playerChampion: string,
+  enemyChampion: string
+): Promise<{ stats: MatchupStats | null; mirrored: boolean }> {
+  const direct = await repository.get(patch, lane, playerChampion, enemyChampion);
+  if (direct) return { stats: direct, mirrored: false };
+  const reversed = await repository.get(patch, lane, enemyChampion, playerChampion);
+  if (!reversed) return { stats: null, mirrored: false };
+  return { stats: invertMatchupPerspective(reversed), mirrored: true };
+}
+
 const CHAMPION_LOCALIZATION_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
 
 let cachedJaChampionLocalization: {
@@ -310,6 +338,7 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const previousPatch = getPreviousPatch(requestedPatch);
       let resolvedPatch = requestedPatch;
       let usedPreviousPatchFallback = false;
+      let usedMirroredFallback = false;
       let primaryStats: MatchupStats | null = null;
       let partnerStats: MatchupStats | null = null;
       let primaryStatsGames = 0;
@@ -364,28 +393,38 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       }
       if (statsRepository) {
         if (lane === "bot") {
-          const [adcStats, supportStats] = await Promise.all([
-            statsRepository.get(requestedPatch, "adc", parseInput.data.playerChampion, parseInput.data.enemyChampion),
-            statsRepository.get(
+          const [adcLookup, supportLookup] = await Promise.all([
+            getStatsWithMirroredFallback(
+              statsRepository,
+              requestedPatch,
+              "adc",
+              parseInput.data.playerChampion,
+              parseInput.data.enemyChampion
+            ),
+            getStatsWithMirroredFallback(
+              statsRepository,
               requestedPatch,
               "support",
               parseInput.data.playerChampionPartner ?? "",
               parseInput.data.enemyChampionPartner ?? ""
             )
           ]);
-          primaryStats = adcStats;
-          partnerStats = supportStats;
-          primaryStatsGames = adcStats?.games ?? 0;
-          partnerStatsGames = supportStats?.games ?? 0;
+          primaryStats = adcLookup.stats;
+          partnerStats = supportLookup.stats;
+          primaryStatsGames = adcLookup.stats?.games ?? 0;
+          partnerStatsGames = supportLookup.stats?.games ?? 0;
+          usedMirroredFallback = adcLookup.mirrored || supportLookup.mirrored;
         } else {
-          const laneStats = await statsRepository.get(
+          const laneLookup = await getStatsWithMirroredFallback(
+            statsRepository,
             requestedPatch,
             lane,
             parseInput.data.playerChampion,
             parseInput.data.enemyChampion
           );
-          primaryStats = laneStats;
-          primaryStatsGames = laneStats?.games ?? 0;
+          primaryStats = laneLookup.stats;
+          primaryStatsGames = laneLookup.stats?.games ?? 0;
+          usedMirroredFallback = laneLookup.mirrored;
         }
       }
       if (
@@ -394,37 +433,47 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         primaryStatsGames + partnerStatsGames < requiredSampleGames
       ) {
         if (lane === "bot") {
-          const [adcStatsFallback, supportStatsFallback] = await Promise.all([
-            statsRepository.get(previousPatch, "adc", parseInput.data.playerChampion, parseInput.data.enemyChampion),
-            statsRepository.get(
+          const [adcFallbackLookup, supportFallbackLookup] = await Promise.all([
+            getStatsWithMirroredFallback(
+              statsRepository,
+              previousPatch,
+              "adc",
+              parseInput.data.playerChampion,
+              parseInput.data.enemyChampion
+            ),
+            getStatsWithMirroredFallback(
+              statsRepository,
               previousPatch,
               "support",
               parseInput.data.playerChampionPartner ?? "",
               parseInput.data.enemyChampionPartner ?? ""
             )
           ]);
-          const fallbackGames = (adcStatsFallback?.games ?? 0) + (supportStatsFallback?.games ?? 0);
+          const fallbackGames = (adcFallbackLookup.stats?.games ?? 0) + (supportFallbackLookup.stats?.games ?? 0);
           if (fallbackGames > primaryStatsGames + partnerStatsGames) {
-            primaryStats = adcStatsFallback;
-            partnerStats = supportStatsFallback;
-            primaryStatsGames = adcStatsFallback?.games ?? 0;
-            partnerStatsGames = supportStatsFallback?.games ?? 0;
+            primaryStats = adcFallbackLookup.stats;
+            partnerStats = supportFallbackLookup.stats;
+            primaryStatsGames = adcFallbackLookup.stats?.games ?? 0;
+            partnerStatsGames = supportFallbackLookup.stats?.games ?? 0;
             resolvedPatch = previousPatch;
             usedPreviousPatchFallback = true;
+            usedMirroredFallback = adcFallbackLookup.mirrored || supportFallbackLookup.mirrored;
           }
         } else {
-          const laneStatsFallback = await statsRepository.get(
+          const laneFallbackLookup = await getStatsWithMirroredFallback(
+            statsRepository,
             previousPatch,
             lane,
             parseInput.data.playerChampion,
             parseInput.data.enemyChampion
           );
-          const fallbackGames = laneStatsFallback?.games ?? 0;
+          const fallbackGames = laneFallbackLookup.stats?.games ?? 0;
           if (fallbackGames > primaryStatsGames) {
-            primaryStats = laneStatsFallback;
+            primaryStats = laneFallbackLookup.stats;
             primaryStatsGames = fallbackGames;
             resolvedPatch = previousPatch;
             usedPreviousPatchFallback = true;
+            usedMirroredFallback = laneFallbackLookup.mirrored;
           }
         }
       }
@@ -564,6 +613,16 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
             language === "ja"
               ? `現在パッチ(${requestedPatch})のサンプルが不足しているため、前パッチ(${resolvedPatch})のデータを使用しています。`
               : `Current patch (${requestedPatch}) has limited samples; using previous patch (${resolvedPatch}) data.`
+          ),
+          ...coaching.meta.warnings
+        ];
+      }
+      if (usedMirroredFallback) {
+        coaching.meta.warnings = [
+          clampWarning(
+            language === "ja"
+              ? "対向視点のマッチアップ統計を反転して使用しています（勝率/序盤指標を補正）。"
+              : "Using mirrored matchup stats (enemy-vs-player row inverted for winrate/early metrics)."
           ),
           ...coaching.meta.warnings
         ];
