@@ -42,6 +42,18 @@ export async function getPostgresPool(connectionString: string): Promise<Pool> {
       CREATE INDEX IF NOT EXISTS idx_matchup_stats_cache_expires
         ON matchup_stats_cache (expires_at);
     `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS matchup_feedback (
+        id BIGSERIAL PRIMARY KEY,
+        patch TEXT NOT NULL,
+        lane TEXT NOT NULL,
+        player_champion TEXT NOT NULL,
+        enemy_champion TEXT NOT NULL,
+        rating TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL
+      );
+    `);
   });
 
   return poolInstance;

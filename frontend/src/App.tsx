@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { COPY, detectInitialLanguage, formatTemplate, persistLanguage, type AppLanguage } from "./i18n";
 import ChampionPicker from "./components/ChampionPicker";
+import { AdminFeedbackDashboard } from "./AdminFeedbackDashboard";
 
 type Difficulty = "easy" | "favored" | "even" | "not_favored" | "hard";
 type CoachLane = "top" | "jungle" | "mid" | "bot";
@@ -102,7 +103,7 @@ interface CoachResponse {
   };
 }
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim()
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim()
   ? (import.meta.env.VITE_API_BASE_URL as string)
   : import.meta.env.DEV
     ? "http://localhost:4000"
@@ -231,11 +232,20 @@ export default function App() {
   const [loading, setLoading] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string>("");
   const [submitError, setSubmitError] = useState<string>("");
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState<boolean>(false);
   const [showDifficultyHelp, setShowDifficultyHelp] = useState<boolean>(false);
   const [jaChampionNames, setJaChampionNames] = useState<Record<string, string>>({});
   const [championIdByKey, setChampionIdByKey] = useState<Record<string, string>>({});
   const [iconPatch, setIconPatch] = useState<string>("");
   const copy = COPY[language];
+
+  const [currentHash, setCurrentHash] = useState(window.location.hash);
+
+  useEffect(() => {
+    const onHashChange = () => setCurrentHash(window.location.hash);
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   useEffect(() => {
     persistLanguage(language);
@@ -428,6 +438,7 @@ export default function App() {
         );
       }
       setResult(payload as CoachResponse);
+      setFeedbackSubmitted(false);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : copy.errors.fetchCoaching);
       setResult(null);
@@ -452,6 +463,26 @@ export default function App() {
     await requestCoaching();
   };
 
+  const submitFeedback = async (rating: "good" | "bad") => {
+    if (!result) return;
+    try {
+      await fetch(`${API_BASE}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patch: result.matchup.patch,
+          lane: result.matchup.lane,
+          playerChampion: result.matchup.playerChampion,
+          enemyChampion: result.matchup.enemyChampion,
+          rating
+        })
+      });
+      setFeedbackSubmitted(true);
+    } catch (error) {
+      console.error("Failed to submit feedback", error);
+    }
+  };
+
   const shouldAutoRefresh = useMemo(() => {
     if (!result || loading || submitError) return false;
     return result.meta.providerSamples.effectiveGames < result.meta.sampleTarget;
@@ -464,6 +495,10 @@ export default function App() {
     }, AUTO_REFRESH_INTERVAL_MS);
     return () => clearTimeout(timer);
   }, [shouldAutoRefresh, requestCoaching]);
+
+  if (currentHash === "#/admin/feedback") {
+    return <AdminFeedbackDashboard />;
+  }
 
   return (
     <div className="page">
@@ -646,6 +681,22 @@ export default function App() {
                 {championLabel(result.matchup.enemyChampionPartner)}
               </p>
             ) : null}
+
+            <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: "1rem" }}>
+              {feedbackSubmitted ? (
+                <p className="hint" style={{ margin: 0, color: "var(--primary)" }}>{copy.result.feedbackThanks}</p>
+              ) : (
+                <>
+                  <p className="meta" style={{ margin: 0 }}>{copy.result.feedbackPrompt}</p>
+                  <button type="button" className="chip" onClick={() => void submitFeedback("good")} style={{ padding: "0.25rem 0.5rem" }}>
+                    👍 {copy.result.feedbackGood}
+                  </button>
+                  <button type="button" className="chip" onClick={() => void submitFeedback("bad")} style={{ padding: "0.25rem 0.5rem" }}>
+                    👎 {copy.result.feedbackBad}
+                  </button>
+                </>
+              )}
+            </div>
           </section>
 
           <section className="card">

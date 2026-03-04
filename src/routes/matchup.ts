@@ -14,6 +14,15 @@ import type { ExternalMatchupStatsProvider } from "../services/externalMatchupSt
 import { GeminiCoachService } from "../services/geminiCoachService.js";
 import type { MatchupStatsStore } from "../services/matchupStatsStore.js";
 import type { MatchupStats } from "../types/stats.js";
+import { z } from "zod";
+
+const feedbackRequestSchema = z.object({
+  patch: z.string().min(1),
+  lane: z.string().min(1),
+  playerChampion: z.string().min(1),
+  enemyChampion: z.string().min(1),
+  rating: z.enum(["good", "bad"])
+});
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
   let timeoutId: NodeJS.Timeout | undefined;
@@ -40,7 +49,9 @@ function combineBotStats(primary: MatchupStats | null, partner: MatchupStats | n
   return {
     patch: left.patch,
     games: totalGames,
-    winRate: weighted(left.winRate, left.games, right.winRate, right.games),
+    // Simple 50/50 average: primary = playerChampion vs enemyADC, partner = playerChampion vs enemySupport.
+    // These are independent matchup dimensions, not a single population, so equal weighting is more meaningful.
+    winRate: Number(((left.winRate + right.winRate) / 2).toFixed(3)),
     goldDiff15: Math.round((left.goldDiff15 * left.games + right.goldDiff15 * right.games) / totalGames),
     pre6KillRate: weighted(left.pre6KillRate, left.games, right.pre6KillRate, right.games),
     earlyDeathRate: weighted(left.earlyDeathRate, left.games, right.earlyDeathRate, right.games),
@@ -156,6 +167,7 @@ interface CreateMatchupRouterOptions {
   externalStatsProvider?: ExternalMatchupStatsProvider;
   geminiCoachService?: GeminiCoachService;
   championFactsService?: ChampionFactsService;
+  dbClient?: { type: "postgres"; pool: import("pg").Pool } | { type: "sqlite"; db: import("sqlite").Database };
 }
 
 export function createMatchupRouter(options: CreateMatchupRouterOptions): Router {
@@ -165,7 +177,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
     statsRepository,
     externalStatsProvider,
     geminiCoachService,
-    championFactsService
+    championFactsService,
+    dbClient
   } = options;
   const requiredSampleGames = Math.max(1, Math.floor(minSampleGames ?? 10));
   const router = Router();
@@ -275,9 +288,9 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const dynamicChampions = isBotAggregate
         ? statsRepository
           ? [
-              ...(await statsRepository.listChampionsByLane(currentPatch, "adc", 400)),
-              ...(await statsRepository.listChampionsByLane(currentPatch, "support", 400))
-            ]
+            ...(await statsRepository.listChampionsByLane(currentPatch, "adc", 400)),
+            ...(await statsRepository.listChampionsByLane(currentPatch, "support", 400))
+          ]
           : []
         : statsRepository
           ? await statsRepository.listChampionsByLane(currentPatch, dataLane, 400)
@@ -286,9 +299,9 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       if (statsRepository && resolvedDynamicChampions.length === 0 && previousPatch) {
         resolvedDynamicChampions = isBotAggregate
           ? [
-              ...(await statsRepository.listChampionsByLane(previousPatch, "adc", 400)),
-              ...(await statsRepository.listChampionsByLane(previousPatch, "support", 400))
-            ]
+            ...(await statsRepository.listChampionsByLane(previousPatch, "adc", 400)),
+            ...(await statsRepository.listChampionsByLane(previousPatch, "support", 400))
+          ]
           : await statsRepository.listChampionsByLane(previousPatch, dataLane, 400);
         if (resolvedDynamicChampions.length > 0) sourcePatch = previousPatch;
       }
@@ -347,31 +360,31 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       let externalPartnerStats: MatchupStats | null = null;
       let externalSourceMeta:
         | {
-            provider: string;
-            status: "success" | "cache_hit" | "http_error" | "timeout" | "network_error" | "parse_miss";
-            failureReason?: string;
-            httpStatus?: number;
-          }
+          provider: string;
+          status: "success" | "cache_hit" | "http_error" | "timeout" | "network_error" | "parse_miss";
+          failureReason?: string;
+          httpStatus?: number;
+        }
         | null = null;
       let usedExternalProvider: string | null = null;
       const botlaneContexts =
         lane === "bot" && parseInput.data.playerChampionPartner && parseInput.data.enemyChampionPartner && parseInput.data.playerRole
           ? {
-              playerRole: parseInput.data.playerRole,
-              allyAdc: parseInput.data.playerChampion,
-              allySupport: parseInput.data.playerChampionPartner,
-              enemyAdc: parseInput.data.enemyChampion,
-              enemySupport: parseInput.data.enemyChampionPartner
-            }
+            playerRole: parseInput.data.playerRole,
+            allyAdc: parseInput.data.playerChampion,
+            allySupport: parseInput.data.playerChampionPartner,
+            enemyAdc: parseInput.data.enemyChampion,
+            enemySupport: parseInput.data.enemyChampionPartner
+          }
           : undefined;
       let factsWarning = "";
       let championFacts:
         | {
-            playerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
-            enemyFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
-            playerPartnerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
-            enemyPartnerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
-          }
+          playerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
+          enemyFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
+          playerPartnerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
+          enemyPartnerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
+        }
         | undefined;
       if (championFactsService) {
         try {
@@ -391,29 +404,32 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           factsWarning = error instanceof Error ? error.message : "Champion facts lookup failed.";
         }
       }
+      // For botlane: look up playerChampion (in their role) vs each enemy separately.
+      // primaryStats = playerChampion vs enemy ADC; partnerStats = playerChampion vs enemy support.
+      const playerLane = lane === "bot" ? (parseInput.data.playerRole ?? "adc") : lane;
       if (statsRepository) {
         if (lane === "bot") {
-          const [adcLookup, supportLookup] = await Promise.all([
+          const [vsAdcLookup, vsSupportLookup] = await Promise.all([
             getStatsWithMirroredFallback(
               statsRepository,
               requestedPatch,
-              "adc",
+              playerLane,
               parseInput.data.playerChampion,
               parseInput.data.enemyChampion
             ),
             getStatsWithMirroredFallback(
               statsRepository,
               requestedPatch,
-              "support",
-              parseInput.data.playerChampionPartner ?? "",
+              playerLane,
+              parseInput.data.playerChampion,
               parseInput.data.enemyChampionPartner ?? ""
             )
           ]);
-          primaryStats = adcLookup.stats;
-          partnerStats = supportLookup.stats;
-          primaryStatsGames = adcLookup.stats?.games ?? 0;
-          partnerStatsGames = supportLookup.stats?.games ?? 0;
-          usedMirroredFallback = adcLookup.mirrored || supportLookup.mirrored;
+          primaryStats = vsAdcLookup.stats;
+          partnerStats = vsSupportLookup.stats;
+          primaryStatsGames = vsAdcLookup.stats?.games ?? 0;
+          partnerStatsGames = vsSupportLookup.stats?.games ?? 0;
+          usedMirroredFallback = vsAdcLookup.mirrored || vsSupportLookup.mirrored;
         } else {
           const laneLookup = await getStatsWithMirroredFallback(
             statsRepository,
@@ -433,31 +449,31 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         primaryStatsGames + partnerStatsGames < requiredSampleGames
       ) {
         if (lane === "bot") {
-          const [adcFallbackLookup, supportFallbackLookup] = await Promise.all([
+          const [vsAdcFallbackLookup, vsSupportFallbackLookup] = await Promise.all([
             getStatsWithMirroredFallback(
               statsRepository,
               previousPatch,
-              "adc",
+              playerLane,
               parseInput.data.playerChampion,
               parseInput.data.enemyChampion
             ),
             getStatsWithMirroredFallback(
               statsRepository,
               previousPatch,
-              "support",
-              parseInput.data.playerChampionPartner ?? "",
+              playerLane,
+              parseInput.data.playerChampion,
               parseInput.data.enemyChampionPartner ?? ""
             )
           ]);
-          const fallbackGames = (adcFallbackLookup.stats?.games ?? 0) + (supportFallbackLookup.stats?.games ?? 0);
+          const fallbackGames = (vsAdcFallbackLookup.stats?.games ?? 0) + (vsSupportFallbackLookup.stats?.games ?? 0);
           if (fallbackGames > primaryStatsGames + partnerStatsGames) {
-            primaryStats = adcFallbackLookup.stats;
-            partnerStats = supportFallbackLookup.stats;
-            primaryStatsGames = adcFallbackLookup.stats?.games ?? 0;
-            partnerStatsGames = supportFallbackLookup.stats?.games ?? 0;
+            primaryStats = vsAdcFallbackLookup.stats;
+            partnerStats = vsSupportFallbackLookup.stats;
+            primaryStatsGames = vsAdcFallbackLookup.stats?.games ?? 0;
+            partnerStatsGames = vsSupportFallbackLookup.stats?.games ?? 0;
             resolvedPatch = previousPatch;
             usedPreviousPatchFallback = true;
-            usedMirroredFallback = adcFallbackLookup.mirrored || supportFallbackLookup.mirrored;
+            usedMirroredFallback = vsAdcFallbackLookup.mirrored || vsSupportFallbackLookup.mirrored;
           }
         } else {
           const laneFallbackLookup = await getStatsWithMirroredFallback(
@@ -481,10 +497,10 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       if (externalStatsProvider) {
         try {
           if (lane === "bot") {
-            const [externalAdc, externalSupport] = await Promise.all([
+            const [externalVsAdc, externalVsSupport] = await Promise.all([
               withTimeout(
                 externalStatsProvider.getMatchupStats({
-                  lane: "adc",
+                  lane: playerLane,
                   patch: requestedPatch,
                   playerChampion: parseInput.data.playerChampion,
                   enemyChampion: parseInput.data.enemyChampion
@@ -494,32 +510,32 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
               ),
               withTimeout(
                 externalStatsProvider.getMatchupStats({
-                  lane: "support",
+                  lane: playerLane,
                   patch: requestedPatch,
-                  playerChampion: parseInput.data.playerChampionPartner ?? "",
+                  playerChampion: parseInput.data.playerChampion,
                   enemyChampion: parseInput.data.enemyChampionPartner ?? ""
                 }),
                 4_000,
                 "External matchup source timed out."
               )
             ]);
-            const adcResult = externalAdc.result;
-            const supportResult = externalSupport.result;
-            if (adcResult?.stats && primaryStatsGames < adcResult.stats.games) {
-              externalPrimaryStats = adcResult.stats;
-              primaryStats = adcResult.stats;
-              primaryStatsGames = adcResult.stats.games;
-              usedExternalProvider = adcResult.provider;
+            const vsAdcResult = externalVsAdc.result;
+            const vsSupportResult = externalVsSupport.result;
+            if (vsAdcResult?.stats && primaryStatsGames < vsAdcResult.stats.games) {
+              externalPrimaryStats = vsAdcResult.stats;
+              primaryStats = vsAdcResult.stats;
+              primaryStatsGames = vsAdcResult.stats.games;
+              usedExternalProvider = vsAdcResult.provider;
             }
-            if (supportResult?.stats && partnerStatsGames < supportResult.stats.games) {
-              externalPartnerStats = supportResult.stats;
-              partnerStats = supportResult.stats;
-              partnerStatsGames = supportResult.stats.games;
-              usedExternalProvider = supportResult.provider;
+            if (vsSupportResult?.stats && partnerStatsGames < vsSupportResult.stats.games) {
+              externalPartnerStats = vsSupportResult.stats;
+              partnerStats = vsSupportResult.stats;
+              partnerStatsGames = vsSupportResult.stats.games;
+              usedExternalProvider = vsSupportResult.provider;
             }
             const preferredOutcome =
-              [externalAdc, externalSupport].find((o) => o.status !== "success" && o.status !== "cache_hit") ??
-              externalAdc;
+              [externalVsAdc, externalVsSupport].find((o) => o.status !== "success" && o.status !== "cache_hit") ??
+              externalVsAdc;
             externalSourceMeta = {
               provider: preferredOutcome.provider,
               status: preferredOutcome.status,
@@ -685,19 +701,19 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const overview = await (
         isBotAggregate
           ? (() => {
-              return Promise.all([
-                statsRepository.getCacheOverview(patch, "adc"),
-                statsRepository.getCacheOverview(patch, "support")
-              ]).then(([adc, support]) => ({
-                totalCount: adc.totalCount + support.totalCount,
-                freshCount: adc.freshCount + support.freshCount,
-                staleCount: adc.staleCount + support.staleCount,
-                latestComputedAt: [adc.latestComputedAt, support.latestComputedAt]
-                  .filter((v): v is string => Boolean(v))
-                  .sort()
-                  .at(-1) ?? null
-              }));
-            })()
+            return Promise.all([
+              statsRepository.getCacheOverview(patch, "adc"),
+              statsRepository.getCacheOverview(patch, "support")
+            ]).then(([adc, support]) => ({
+              totalCount: adc.totalCount + support.totalCount,
+              freshCount: adc.freshCount + support.freshCount,
+              staleCount: adc.staleCount + support.staleCount,
+              latestComputedAt: [adc.latestComputedAt, support.latestComputedAt]
+                .filter((v): v is string => Boolean(v))
+                .sort()
+                .at(-1) ?? null
+            }));
+          })()
           : statsRepository.getCacheOverview(patch, lane)
       );
       const totalPossiblePairs =
@@ -794,13 +810,13 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const pairs =
         isBotAggregate
           ? (
-              await Promise.all([
-                statsRepository.listCachedPairs(patch, { lane: "adc", limit, freshOnly }),
-                statsRepository.listCachedPairs(patch, { lane: "support", limit, freshOnly })
-              ])
-            )
-              .flat()
-              .slice(0, limit)
+            await Promise.all([
+              statsRepository.listCachedPairs(patch, { lane: "adc", limit, freshOnly }),
+              statsRepository.listCachedPairs(patch, { lane: "support", limit, freshOnly })
+            ])
+          )
+            .flat()
+            .slice(0, limit)
           : await statsRepository.listCachedPairs(patch, { lane, limit, freshOnly });
       return res.json({
         patch,
@@ -813,6 +829,75 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         error: "Failed to list cached pairs.",
         message: error instanceof Error ? error.message : "Unknown error"
       });
+    }
+  });
+
+  router.post("/feedback", async (req, res) => {
+    try {
+      if (!options.dbClient) {
+        return res.status(503).json({ error: "Database not configured for feedback." });
+      }
+
+      const parsed = feedbackRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid feedback payload", details: parsed.error.issues });
+      }
+
+      const { patch, lane, playerChampion, enemyChampion, rating } = parsed.data;
+      const createdAt = new Date().toISOString();
+
+      if (options.dbClient.type === "postgres") {
+        await options.dbClient.pool.query(
+          `INSERT INTO matchup_feedback (patch, lane, player_champion, enemy_champion, rating, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6::timestamptz)`,
+          [patch, lane, playerChampion, enemyChampion, rating, createdAt]
+        );
+      } else {
+        await options.dbClient.db.run(
+          `INSERT INTO matchup_feedback (patch, lane, player_champion, enemy_champion, rating, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [patch, lane, playerChampion, enemyChampion, rating, createdAt]
+        );
+      }
+
+      return res.json({ success: true });
+    } catch (error) {
+      console.error("[feedback] Failed to save feedback:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  router.get("/admin/feedback", async (req, res) => {
+    // Simple local-only restriction
+    const isLocal = req.ip === "::1" || req.ip === "127.0.0.1" || (req.ip ?? "").includes("::ffff:127.0.0.1");
+    if (!isLocal) {
+      return res.status(403).json({ error: "Access denied. Admin routes are restricted to localhost." });
+    }
+
+    if (!options.dbClient) {
+      return res.status(503).json({ error: "Database not configured for feedback." });
+    }
+
+    try {
+      let rows: any[] = [];
+      if (options.dbClient.type === "postgres") {
+        const result = await options.dbClient.pool.query(
+          `SELECT id, patch, lane, player_champion as "playerChampion", enemy_champion as "enemyChampion", rating, created_at as "createdAt"
+           FROM matchup_feedback
+           ORDER BY created_at DESC`
+        );
+        rows = result.rows;
+      } else {
+        rows = await options.dbClient.db.all(
+          `SELECT id, patch, lane, player_champion as playerChampion, enemy_champion as enemyChampion, rating, created_at as createdAt
+           FROM matchup_feedback
+           ORDER BY created_at DESC`
+        );
+      }
+      return res.json({ success: true, feedback: rows });
+    } catch (error) {
+      console.error("[feedback] Failed to get feedback:", error);
+      return res.status(500).json({ error: "Internal server error" });
     }
   });
 

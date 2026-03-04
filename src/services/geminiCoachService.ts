@@ -598,6 +598,8 @@ Constraints:
 - champion facts are authoritative; do not contradict them
 - never discuss mana management for champions with resourceType other than mana
 - do not call a spell a disengage tool unless that spell is explicitly tagged with role "disengage"
+- ALL ability-specific advice must be from the perspective of playerChampion; playerChampionPartner is context only
+- Do NOT give spell-specific mechanics advice for playerChampionPartner; focus on how playerChampion should play
 ${outputLanguageInstruction}
 
 Matchup:
@@ -697,6 +699,8 @@ Each key is an object with exactly:
 - commonTrap
 
 Write role-specific advice from the player's perspective.
+ALL advice must be about how playerChampion (${input.playerChampion}, role: ${input.playerRole}) should play.
+Do NOT give spell-specific mechanics for the ally partner; they are context only.
 Keep each value practical and concise (1 sentence each).
 Champion facts are authoritative; do not contradict them.
 Never discuss mana management for champions with resourceType other than mana.

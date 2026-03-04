@@ -23,16 +23,20 @@ async function bootstrap(): Promise<void> {
   let externalStatsProvider: ExternalMatchupStatsProvider | undefined;
   const championFactsService = new ChampionFactsService();
   let statsRepository: MatchupStatsStore | undefined;
+  let dbClient: { type: "postgres"; pool: import("pg").Pool } | { type: "sqlite"; db: import("sqlite").Database } | undefined;
+
   if (env.DB_PROVIDER === "postgres") {
     if (!env.DATABASE_URL) {
       throw new Error("DATABASE_URL is required when DB_PROVIDER=postgres.");
     }
     const pgPool = await getPostgresPool(env.DATABASE_URL);
     statsRepository = new PostgresMatchupStatsRepository(pgPool);
+    dbClient = { type: "postgres", pool: pgPool };
     console.log("[db] Using postgres provider for matchup cache.");
   } else {
     const db = await getDatabase(env.STATS_DB_PATH);
     statsRepository = new MatchupStatsRepository(db);
+    dbClient = { type: "sqlite", db };
     console.log(`[db] Using sqlite provider at ${env.STATS_DB_PATH}.`);
   }
   const geminiKeys = [
@@ -40,8 +44,8 @@ async function bootstrap(): Promise<void> {
       [
         ...(env.GEMINI_API_KEYS
           ? env.GEMINI_API_KEYS.split(",")
-              .map((value) => value.trim())
-              .filter((value) => value.length > 0)
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0)
           : []),
         ...(env.GEMINI_API_KEY ? [env.GEMINI_API_KEY] : [])
       ].filter((value) => value.length > 0)
@@ -49,9 +53,9 @@ async function bootstrap(): Promise<void> {
   ];
   const geminiCoachService = geminiKeys.length > 0
     ? new GeminiCoachService({
-        apiKeys: geminiKeys,
-        model: env.GEMINI_MODEL
-      })
+      apiKeys: geminiKeys,
+      model: env.GEMINI_MODEL
+    })
     : undefined;
   // Matchup responses are served from cached DB + external provider data.
   if (env.EXTERNAL_STATS_PROVIDER === "lolalytics") {
@@ -76,7 +80,8 @@ async function bootstrap(): Promise<void> {
       statsRepository,
       externalStatsProvider,
       geminiCoachService,
-      championFactsService
+      championFactsService,
+      dbClient
     })
   );
 

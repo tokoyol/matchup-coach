@@ -61,7 +61,11 @@ const en = {
     confidence: "Confidence",
     sampleSize: "Sample size",
     statsUsed: "Stats used",
-    generated: "Generated"
+    generated: "Generated",
+    feedbackPrompt: "Was this analysis accurate?",
+    feedbackGood: "Good",
+    feedbackBad: "Bad",
+    feedbackThanks: "Thanks for the feedback!"
   },
   enums: {
     difficulty: {

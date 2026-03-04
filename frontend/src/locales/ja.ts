@@ -61,7 +61,11 @@ const ja = {
     confidence: "信頼度",
     sampleSize: "サンプル数",
     statsUsed: "統計利用",
-    generated: "生成日時"
+    generated: "生成日時",
+    feedbackPrompt: "この分析は正確でしたか？",
+    feedbackGood: "良い",
+    feedbackBad: "悪い",
+    feedbackThanks: "フィードバックありがとうございます！"
   },
   enums: {
     difficulty: {
