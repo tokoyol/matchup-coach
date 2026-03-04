@@ -26,7 +26,7 @@ interface ChampionMetadataResponse {
   >;
 }
 
-interface DDragonVersionsResponse extends Array<string> {}
+interface DDragonVersionsResponse extends Array<string> { }
 interface DDragonChampionListPayload {
   data: Record<
     string,
@@ -202,10 +202,10 @@ function hasRuneAdjustment(result: CoachResponse): boolean {
   const rune = result.runeAdjustments;
   return Boolean(
     rune.keystone.recommended.trim() ||
-      rune.keystone.reason.trim() ||
-      rune.secondary.tree.trim() ||
-      rune.secondary.reason.trim() ||
-      rune.shardsNote.trim()
+    rune.keystone.reason.trim() ||
+    rune.secondary.tree.trim() ||
+    rune.secondary.reason.trim() ||
+    rune.shardsNote.trim()
   );
 }
 
@@ -309,9 +309,9 @@ export default function App() {
         const responses =
           selectedLane === "bot"
             ? await Promise.all([
-                fetch(`${API_BASE}/api/champions?lane=adc`),
-                fetch(`${API_BASE}/api/champions?lane=support`)
-              ])
+              fetch(`${API_BASE}/api/champions?lane=adc`),
+              fetch(`${API_BASE}/api/champions?lane=support`)
+            ])
             : [await fetch(`${API_BASE}/api/champions?lane=${encodeURIComponent(selectedLane)}`)];
 
         const failedResponse = responses.find((response) => !response.ok);
@@ -411,10 +411,10 @@ export default function App() {
           language,
           ...(selectedLane === "bot"
             ? {
-                playerRole,
-                playerChampionPartner,
-                enemyChampionPartner
-              }
+              playerRole,
+              playerChampionPartner,
+              enemyChampionPartner
+            }
             : {})
         })
       });
@@ -422,9 +422,9 @@ export default function App() {
       if (!response.ok) {
         throw new Error(
           payload?.error ??
-            formatTemplate(copy.errors.requestFailed, {
-              status: response.status
-            })
+          formatTemplate(copy.errors.requestFailed, {
+            status: response.status
+          })
         );
       }
       setResult(payload as CoachResponse);
@@ -506,48 +506,48 @@ export default function App() {
               </label>
             </div>
             <div className="botlane-grid">
-            <section className="card botlane-side">
-              <h3>{copy.form.allyBotlane}</h3>
-              <ChampionPicker
-                label={copy.form.roles.adc}
-                value={playerChampion}
-                options={primaryChampions}
-                onChange={setPlayerChampion}
-                getLabel={championLabel}
-                getIconUrl={championIconUrl}
-                noResultsLabel={pickerNoResultsLabel}
-              />
-              <ChampionPicker
-                label={copy.form.roles.support}
-                value={playerChampionPartner}
-                options={partnerChampions}
-                onChange={setPlayerChampionPartner}
-                getLabel={championLabel}
-                getIconUrl={championIconUrl}
-                noResultsLabel={pickerNoResultsLabel}
-              />
-            </section>
-            <section className="card botlane-side">
-              <h3>{copy.form.enemyBotlane}</h3>
-              <ChampionPicker
-                label={copy.form.roles.adc}
-                value={enemyChampion}
-                options={enemyOptions}
-                onChange={setEnemyChampion}
-                getLabel={championLabel}
-                getIconUrl={championIconUrl}
-                noResultsLabel={pickerNoResultsLabel}
-              />
-              <ChampionPicker
-                label={copy.form.roles.support}
-                value={enemyChampionPartner}
-                options={enemyPartnerOptions}
-                onChange={setEnemyChampionPartner}
-                getLabel={championLabel}
-                getIconUrl={championIconUrl}
-                noResultsLabel={pickerNoResultsLabel}
-              />
-            </section>
+              <section className="card botlane-side">
+                <h3>{copy.form.allyBotlane}</h3>
+                <ChampionPicker
+                  label={copy.form.roles.adc}
+                  value={playerChampion}
+                  options={primaryChampions}
+                  onChange={setPlayerChampion}
+                  getLabel={championLabel}
+                  getIconUrl={championIconUrl}
+                  noResultsLabel={pickerNoResultsLabel}
+                />
+                <ChampionPicker
+                  label={copy.form.roles.support}
+                  value={playerChampionPartner}
+                  options={partnerChampions}
+                  onChange={setPlayerChampionPartner}
+                  getLabel={championLabel}
+                  getIconUrl={championIconUrl}
+                  noResultsLabel={pickerNoResultsLabel}
+                />
+              </section>
+              <section className="card botlane-side">
+                <h3>{copy.form.enemyBotlane}</h3>
+                <ChampionPicker
+                  label={copy.form.roles.adc}
+                  value={enemyChampion}
+                  options={enemyOptions}
+                  onChange={setEnemyChampion}
+                  getLabel={championLabel}
+                  getIconUrl={championIconUrl}
+                  noResultsLabel={pickerNoResultsLabel}
+                />
+                <ChampionPicker
+                  label={copy.form.roles.support}
+                  value={enemyChampionPartner}
+                  options={enemyPartnerOptions}
+                  onChange={setEnemyChampionPartner}
+                  getLabel={championLabel}
+                  getIconUrl={championIconUrl}
+                  noResultsLabel={pickerNoResultsLabel}
+                />
+              </section>
             </div>
           </>
         ) : (
@@ -589,11 +589,11 @@ export default function App() {
           <p className="hint">{copy.feedback.chooseDifferent}</p>
         ) : null}
         {!loadError &&
-        selectedLane === "bot" &&
-        (playerChampionPartner.length === 0 ||
-          enemyChampionPartner.length === 0 ||
-          playerChampion === playerChampionPartner ||
-          enemyChampion === enemyChampionPartner) ? (
+          selectedLane === "bot" &&
+          (playerChampionPartner.length === 0 ||
+            enemyChampionPartner.length === 0 ||
+            playerChampion === playerChampionPartner ||
+            enemyChampion === enemyChampionPartner) ? (
           <p className="hint">{copy.feedback.botlaneDifferent}</p>
         ) : null}
         {shouldAutoRefresh ? (
@@ -633,7 +633,7 @@ export default function App() {
             <p className={`difficulty ${result.difficulty}`}>{difficultyLabel(result.difficulty, language)}</p>
             <p className="meta">
               {championLabel(result.matchup.playerChampion)} vs {championLabel(result.matchup.enemyChampion)} |{" "}
-              {copy.form.lanes[result.matchup.lane]} | {result.matchup.patch}
+              {copy.form.lanes[result.matchup.lane]} | {formatTemplate(copy.app.patch, { patch: result.matchup.patch })}
             </p>
             <p className="meta">
               {copy.result.winRate}:{" "}

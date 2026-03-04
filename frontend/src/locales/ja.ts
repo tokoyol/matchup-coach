@@ -24,7 +24,7 @@ const ja = {
     allyLane: "味方 {lane}",
     enemyLane: "敵 {lane}",
     champion: "チャンピオン",
-    submitIdle: "相性コーチングを取得",
+    submitIdle: "相性コーチングを受ける",
     submitLoading: "生成中..."
   },
   feedback: {
@@ -65,11 +65,11 @@ const ja = {
   },
   enums: {
     difficulty: {
-      easy: "かなり有利",
+      easy: "圧勝",
       favored: "有利",
-      even: "五分",
+      even: "互角",
       not_favored: "不利",
-      hard: "かなり不利"
+      hard: "苦戦"
     },
     runeSource: {
       gemini: "Gemini生成",

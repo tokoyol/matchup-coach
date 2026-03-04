@@ -18,10 +18,15 @@ export default function ChampionPicker(props: ChampionPickerProps) {
   const [iconReadyByKey, setIconReadyByKey] = useState<Record<string, boolean>>({});
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  /** Convert hiragana characters to their katakana equivalents for fuzzy-matching. */
+  function toKatakana(str: string): string {
+    return str.replace(/[\u3041-\u3096]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60));
+  }
+
   const filteredOptions = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = toKatakana(query.trim().toLowerCase());
     if (!normalizedQuery) return options;
-    return options.filter((option) => getLabel(option).toLowerCase().includes(normalizedQuery));
+    return options.filter((option) => toKatakana(getLabel(option).toLowerCase()).includes(normalizedQuery));
   }, [options, query, getLabel]);
 
   useEffect(() => {
@@ -126,9 +131,8 @@ export default function ChampionPicker(props: ChampionPickerProps) {
                   <li key={option}>
                     <button
                       type="button"
-                      className={`champion-picker-option${isHighlighted ? " highlighted" : ""}${
-                        isSelected ? " selected" : ""
-                      }`}
+                      className={`champion-picker-option${isHighlighted ? " highlighted" : ""}${isSelected ? " selected" : ""
+                        }`}
                       onMouseEnter={() => setHighlightedIdx(index)}
                       onClick={() => {
                         onChange(option);
