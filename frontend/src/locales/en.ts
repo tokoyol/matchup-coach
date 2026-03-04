@@ -65,6 +65,8 @@ const en = {
     feedbackPrompt: "Was this analysis accurate?",
     feedbackGood: "Good",
     feedbackBad: "Bad",
+    feedbackComment: "Optional: Tell us more about why you chose this rating...",
+    feedbackSubmit: "Submit Feedback",
     feedbackThanks: "Thanks for the feedback!"
   },
   enums: {

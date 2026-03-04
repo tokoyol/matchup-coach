@@ -51,6 +51,7 @@ export async function getPostgresPool(connectionString: string): Promise<Pool> {
         player_champion TEXT NOT NULL,
         enemy_champion TEXT NOT NULL,
         rating TEXT NOT NULL,
+        comment TEXT,
         created_at TIMESTAMPTZ NOT NULL
       );
     `);

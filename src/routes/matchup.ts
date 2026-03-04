@@ -21,7 +21,8 @@ const feedbackRequestSchema = z.object({
   lane: z.string().min(1),
   playerChampion: z.string().min(1),
   enemyChampion: z.string().min(1),
-  rating: z.enum(["good", "bad"])
+  rating: z.enum(["good", "bad"]),
+  comment: z.string().optional()
 });
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
@@ -183,6 +184,12 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
   const requiredSampleGames = Math.max(1, Math.floor(minSampleGames ?? 10));
   const router = Router();
 
+  router.get("/config", (_req, res) => {
+    res.json({
+      patch: currentPatch
+    });
+  });
+
   router.get("/champion-localization", async (req, res) => {
     const language = String(req.query.language ?? "en").trim().toLowerCase();
     if (language !== "ja") {
@@ -283,27 +290,31 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const isBotAggregate = rawLane === "bot";
       const dataLane = normalizeLane(rawLane);
       const lane = isBotAggregate ? "bot" : dataLane;
-      const previousPatch = getPreviousPatch(currentPatch);
       let sourcePatch = currentPatch;
-      const dynamicChampions = isBotAggregate
-        ? statsRepository
-          ? [
-            ...(await statsRepository.listChampionsByLane(currentPatch, "adc", 400)),
-            ...(await statsRepository.listChampionsByLane(currentPatch, "support", 400))
-          ]
-          : []
-        : statsRepository
-          ? await statsRepository.listChampionsByLane(currentPatch, dataLane, 400)
-          : [];
-      let resolvedDynamicChampions = dynamicChampions;
-      if (statsRepository && resolvedDynamicChampions.length === 0 && previousPatch) {
-        resolvedDynamicChampions = isBotAggregate
-          ? [
-            ...(await statsRepository.listChampionsByLane(previousPatch, "adc", 400)),
-            ...(await statsRepository.listChampionsByLane(previousPatch, "support", 400))
-          ]
-          : await statsRepository.listChampionsByLane(previousPatch, dataLane, 400);
-        if (resolvedDynamicChampions.length > 0) sourcePatch = previousPatch;
+      let resolvedDynamicChampions: string[] = [];
+      let checkedPatch = currentPatch;
+
+      for (let i = 0; i < 4; i++) {
+        const dynamicChampions = isBotAggregate
+          ? statsRepository
+            ? [
+              ...(await statsRepository.listChampionsByLane(checkedPatch, "adc", 400)),
+              ...(await statsRepository.listChampionsByLane(checkedPatch, "support", 400))
+            ]
+            : []
+          : statsRepository
+            ? await statsRepository.listChampionsByLane(checkedPatch, dataLane, 400)
+            : [];
+
+        if (dynamicChampions.length > 0) {
+          resolvedDynamicChampions = dynamicChampions;
+          sourcePatch = checkedPatch;
+          break;
+        }
+
+        const prev = getPreviousPatch(checkedPatch);
+        if (!prev) break;
+        checkedPatch = prev;
       }
       const champions =
         lane === "top"
@@ -443,53 +454,59 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           usedMirroredFallback = laneLookup.mirrored;
         }
       }
-      if (
-        statsRepository &&
-        previousPatch &&
-        primaryStatsGames + partnerStatsGames < requiredSampleGames
-      ) {
-        if (lane === "bot") {
-          const [vsAdcFallbackLookup, vsSupportFallbackLookup] = await Promise.all([
-            getStatsWithMirroredFallback(
+      let checkedPatchForStats = requestedPatch;
+      for (let i = 0; i < 4; i++) {
+        if (!statsRepository) break;
+        if (primaryStatsGames + partnerStatsGames >= requiredSampleGames) break;
+
+        // On i=0, we already did the lookup above, so skip to i=1 if i=0 is insufficient.
+        if (i > 0) {
+          const prev = getPreviousPatch(checkedPatchForStats);
+          if (!prev) break;
+          checkedPatchForStats = prev;
+
+          if (lane === "bot") {
+            const [vsAdcLookup, vsSupportLookup] = await Promise.all([
+              getStatsWithMirroredFallback(
+                statsRepository,
+                checkedPatchForStats,
+                playerLane,
+                parseInput.data.playerChampion,
+                parseInput.data.enemyChampion
+              ),
+              getStatsWithMirroredFallback(
+                statsRepository,
+                checkedPatchForStats,
+                playerLane,
+                parseInput.data.playerChampion,
+                parseInput.data.enemyChampionPartner ?? ""
+              )
+            ]);
+            const combinedGames = (vsAdcLookup.stats?.games ?? 0) + (vsSupportLookup.stats?.games ?? 0);
+            if (combinedGames > primaryStatsGames + partnerStatsGames) {
+              primaryStats = vsAdcLookup.stats;
+              partnerStats = vsSupportLookup.stats;
+              primaryStatsGames = vsAdcLookup.stats?.games ?? 0;
+              partnerStatsGames = vsSupportLookup.stats?.games ?? 0;
+              resolvedPatch = checkedPatchForStats;
+              usedPreviousPatchFallback = true;
+              usedMirroredFallback = vsAdcLookup.mirrored || vsSupportLookup.mirrored;
+            }
+          } else {
+            const laneLookup = await getStatsWithMirroredFallback(
               statsRepository,
-              previousPatch,
-              playerLane,
+              checkedPatchForStats,
+              lane,
               parseInput.data.playerChampion,
               parseInput.data.enemyChampion
-            ),
-            getStatsWithMirroredFallback(
-              statsRepository,
-              previousPatch,
-              playerLane,
-              parseInput.data.playerChampion,
-              parseInput.data.enemyChampionPartner ?? ""
-            )
-          ]);
-          const fallbackGames = (vsAdcFallbackLookup.stats?.games ?? 0) + (vsSupportFallbackLookup.stats?.games ?? 0);
-          if (fallbackGames > primaryStatsGames + partnerStatsGames) {
-            primaryStats = vsAdcFallbackLookup.stats;
-            partnerStats = vsSupportFallbackLookup.stats;
-            primaryStatsGames = vsAdcFallbackLookup.stats?.games ?? 0;
-            partnerStatsGames = vsSupportFallbackLookup.stats?.games ?? 0;
-            resolvedPatch = previousPatch;
-            usedPreviousPatchFallback = true;
-            usedMirroredFallback = vsAdcFallbackLookup.mirrored || vsSupportFallbackLookup.mirrored;
-          }
-        } else {
-          const laneFallbackLookup = await getStatsWithMirroredFallback(
-            statsRepository,
-            previousPatch,
-            lane,
-            parseInput.data.playerChampion,
-            parseInput.data.enemyChampion
-          );
-          const fallbackGames = laneFallbackLookup.stats?.games ?? 0;
-          if (fallbackGames > primaryStatsGames) {
-            primaryStats = laneFallbackLookup.stats;
-            primaryStatsGames = fallbackGames;
-            resolvedPatch = previousPatch;
-            usedPreviousPatchFallback = true;
-            usedMirroredFallback = laneFallbackLookup.mirrored;
+            );
+            if ((laneLookup.stats?.games ?? 0) > primaryStatsGames) {
+              primaryStats = laneLookup.stats;
+              primaryStatsGames = laneLookup.stats?.games ?? 0;
+              resolvedPatch = checkedPatchForStats;
+              usedPreviousPatchFallback = true;
+              usedMirroredFallback = laneLookup.mirrored;
+            }
           }
         }
       }
@@ -843,20 +860,20 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         return res.status(400).json({ error: "Invalid feedback payload", details: parsed.error.issues });
       }
 
-      const { patch, lane, playerChampion, enemyChampion, rating } = parsed.data;
+      const { patch, lane, playerChampion, enemyChampion, rating, comment } = parsed.data;
       const createdAt = new Date().toISOString();
 
       if (options.dbClient.type === "postgres") {
         await options.dbClient.pool.query(
-          `INSERT INTO matchup_feedback (patch, lane, player_champion, enemy_champion, rating, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6::timestamptz)`,
-          [patch, lane, playerChampion, enemyChampion, rating, createdAt]
+          `INSERT INTO matchup_feedback (patch, lane, player_champion, enemy_champion, rating, comment, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)`,
+          [patch, lane, playerChampion, enemyChampion, rating, comment ?? null, createdAt]
         );
       } else {
         await options.dbClient.db.run(
-          `INSERT INTO matchup_feedback (patch, lane, player_champion, enemy_champion, rating, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [patch, lane, playerChampion, enemyChampion, rating, createdAt]
+          `INSERT INTO matchup_feedback (patch, lane, player_champion, enemy_champion, rating, comment, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [patch, lane, playerChampion, enemyChampion, rating, comment ?? null, createdAt]
         );
       }
 
@@ -882,14 +899,14 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       let rows: any[] = [];
       if (options.dbClient.type === "postgres") {
         const result = await options.dbClient.pool.query(
-          `SELECT id, patch, lane, player_champion as "playerChampion", enemy_champion as "enemyChampion", rating, created_at as "createdAt"
+          `SELECT id, patch, lane, player_champion as "playerChampion", enemy_champion as "enemyChampion", rating, comment, created_at as "createdAt"
            FROM matchup_feedback
            ORDER BY created_at DESC`
         );
         rows = result.rows;
       } else {
         rows = await options.dbClient.db.all(
-          `SELECT id, patch, lane, player_champion as playerChampion, enemy_champion as enemyChampion, rating, created_at as createdAt
+          `SELECT id, patch, lane, player_champion as playerChampion, enemy_champion as enemyChampion, rating, comment, created_at as createdAt
            FROM matchup_feedback
            ORDER BY created_at DESC`
         );

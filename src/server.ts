@@ -15,10 +15,14 @@ async function bootstrap(): Promise<void> {
   const app = express();
   app.use(
     cors({
-      origin: env.CORS_ORIGIN === "*" ? true : env.CORS_ORIGIN
+      origin: true
     })
   );
   app.use(express.json());
+  app.use((req, res, next) => {
+    console.log(`[request] ${req.method} ${req.url}`);
+    next();
+  });
 
   let externalStatsProvider: ExternalMatchupStatsProvider | undefined;
   const championFactsService = new ChampionFactsService();

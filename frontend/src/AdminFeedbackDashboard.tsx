@@ -9,6 +9,7 @@ interface FeedbackRow {
     playerChampion: string;
     enemyChampion: string;
     rating: "good" | "bad";
+    comment?: string;
     createdAt: string;
 }
 
@@ -94,6 +95,7 @@ export function AdminFeedbackDashboard() {
                                 <th style={{ padding: "1rem" }}>{copy.form.lane}</th>
                                 <th style={{ padding: "1rem" }}>Matchup (Player vs Enemy)</th>
                                 <th style={{ padding: "1rem" }}>Rating</th>
+                                <th style={{ padding: "1rem" }}>Comment</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -113,6 +115,9 @@ export function AdminFeedbackDashboard() {
                                     </td>
                                     <td style={{ padding: "1rem", fontSize: "1.2rem" }}>
                                         {row.rating === "good" ? "👍" : "👎"}
+                                    </td>
+                                    <td style={{ padding: "1rem", color: "var(--text-dim)", maxWidth: "300px", fontSize: "0.9rem" }}>
+                                        {row.comment || "-"}
                                     </td>
                                 </tr>
                             ))}

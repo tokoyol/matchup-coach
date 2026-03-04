@@ -65,6 +65,8 @@ const ja = {
     feedbackPrompt: "この分析は正確でしたか？",
     feedbackGood: "良い",
     feedbackBad: "悪い",
+    feedbackComment: "具体的にどう感じましたか？（任意）",
+    feedbackSubmit: "フィードバックを入力する",
     feedbackThanks: "フィードバックありがとうございます！"
   },
   enums: {

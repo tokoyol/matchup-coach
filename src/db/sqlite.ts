@@ -50,6 +50,7 @@ export async function getDatabase(filename: string): Promise<Database> {
       player_champion TEXT NOT NULL,
       enemy_champion TEXT NOT NULL,
       rating TEXT NOT NULL,
+      comment TEXT,
       created_at TEXT NOT NULL
     );
   `);

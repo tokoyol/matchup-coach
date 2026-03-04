@@ -108,6 +108,15 @@ export const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined
   : import.meta.env.DEV
     ? "http://localhost:4000"
     : window.location.origin;
+
+if (typeof window !== "undefined") {
+  (window as any)._frontendLogs = (window as any)._frontendLogs || [];
+  const originalLog = console.log;
+  console.log = (...args: any[]) => {
+    (window as any)._frontendLogs.push(args.map(a => String(a)).join(" "));
+    originalLog(...args);
+  };
+}
 const AUTO_REFRESH_INTERVAL_MS = 6000;
 
 async function fetchChampionMetadataFromDDragon(): Promise<ChampionMetadataResponse> {
@@ -222,7 +231,8 @@ export default function App() {
   const [primaryChampions, setPrimaryChampions] = useState<string[]>([]);
   const [partnerChampions, setPartnerChampions] = useState<string[]>([]);
   const [selectedLane, setSelectedLane] = useState<CoachLane>("top");
-  const [patch, setPatch] = useState<string>("--");
+  const [systemPatch, setSystemPatch] = useState<string>("--");
+  const [dataPatch, setDataPatch] = useState<string>("--");
   const [playerChampion, setPlayerChampion] = useState<string>("");
   const [enemyChampion, setEnemyChampion] = useState<string>("");
   const [playerChampionPartner, setPlayerChampionPartner] = useState<string>("");
@@ -233,6 +243,8 @@ export default function App() {
   const [loadError, setLoadError] = useState<string>("");
   const [submitError, setSubmitError] = useState<string>("");
   const [feedbackSubmitted, setFeedbackSubmitted] = useState<boolean>(false);
+  const [feedbackRating, setFeedbackRating] = useState<"good" | "bad" | null>(null);
+  const [feedbackComment, setFeedbackComment] = useState<string>("");
   const [showDifficultyHelp, setShowDifficultyHelp] = useState<boolean>(false);
   const [jaChampionNames, setJaChampionNames] = useState<Record<string, string>>({});
   const [championIdByKey, setChampionIdByKey] = useState<Record<string, string>>({});
@@ -245,6 +257,24 @@ export default function App() {
     const onHashChange = () => setCurrentHash(window.location.hash);
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  useEffect(() => {
+    const fetchConfig = async () => {
+      console.log("Fetching config from:", `${API_BASE}/api/config`);
+      try {
+        const response = await fetch(`${API_BASE}/api/config`);
+        console.log("Config response status:", response.status);
+        if (response.ok) {
+          const data = await response.json();
+          console.log("Config data:", JSON.stringify(data));
+          setSystemPatch(data.patch);
+        }
+      } catch (err) {
+        console.error("Failed to fetch system config", err);
+      }
+    };
+    void fetchConfig();
   }, []);
 
   useEffect(() => {
@@ -316,6 +346,7 @@ export default function App() {
     const loadChampions = async () => {
       setLoadError("");
       try {
+        console.log("Fetching champions from:", selectedLane);
         const responses =
           selectedLane === "bot"
             ? await Promise.all([
@@ -324,12 +355,14 @@ export default function App() {
             ])
             : [await fetch(`${API_BASE}/api/champions?lane=${encodeURIComponent(selectedLane)}`)];
 
+        console.log("Champions responses statuses:", responses.map(r => r.status));
         const failedResponse = responses.find((response) => !response.ok);
         if (failedResponse) throw new Error(`Failed to load champions (${failedResponse.status})`);
 
         const payloads = (await Promise.all(
           responses.map((response) => response.json() as Promise<ChampionsResponse>)
         )) as ChampionsResponse[];
+        console.log("Payloads results:", payloads.map(p => ({ lane: p.lane, count: p.champions?.length, patch: p.patch })));
         if (!active) return;
 
         const primaryPool = payloads[0]?.champions ?? [];
@@ -338,7 +371,7 @@ export default function App() {
 
         setPrimaryChampions(primaryPool);
         setPartnerChampions(partnerPool);
-        setPatch(patchValue);
+        setDataPatch(patchValue);
         setPlayerChampion((current) => (primaryPool.includes(current) ? current : primaryPool[0] ?? ""));
         setEnemyChampion((current) => (primaryPool.includes(current) ? current : primaryPool[1] ?? primaryPool[0] ?? ""));
         if (selectedLane === "bot") {
@@ -439,6 +472,8 @@ export default function App() {
       }
       setResult(payload as CoachResponse);
       setFeedbackSubmitted(false);
+      setFeedbackRating(null);
+      setFeedbackComment("");
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : copy.errors.fetchCoaching);
       setResult(null);
@@ -463,7 +498,7 @@ export default function App() {
     await requestCoaching();
   };
 
-  const submitFeedback = async (rating: "good" | "bad") => {
+  const submitFeedback = async (rating: "good" | "bad", comment?: string) => {
     if (!result) return;
     try {
       await fetch(`${API_BASE}/api/feedback`, {
@@ -474,7 +509,8 @@ export default function App() {
           lane: result.matchup.lane,
           playerChampion: result.matchup.playerChampion,
           enemyChampion: result.matchup.enemyChampion,
-          rating
+          rating,
+          comment: comment?.trim() || undefined
         })
       });
       setFeedbackSubmitted(true);
@@ -501,7 +537,7 @@ export default function App() {
   }
 
   return (
-    <div className="page">
+    <div className="page" lang={language}>
       <header className="hero">
         <div className="hero-row">
           <h1>{copy.app.title}</h1>
@@ -513,7 +549,7 @@ export default function App() {
             </select>
           </label>
         </div>
-        <p>{formatTemplate(copy.app.patch, { patch })}</p>
+        <p>{formatTemplate(copy.app.patch, { patch: systemPatch })}</p>
       </header>
 
       <form className="card form" onSubmit={onSubmit}>
@@ -669,6 +705,11 @@ export default function App() {
             <p className="meta">
               {championLabel(result.matchup.playerChampion)} vs {championLabel(result.matchup.enemyChampion)} |{" "}
               {copy.form.lanes[result.matchup.lane]} | {formatTemplate(copy.app.patch, { patch: result.matchup.patch })}
+              {result.matchup.patch !== systemPatch && (
+                <span style={{ marginLeft: "0.5rem", color: "var(--warning)" }}>
+                  ({language === "ja" ? "前回のパッチのデータを使用中" : "Using data from previous patch"})
+                </span>
+              )}
             </p>
             <p className="meta">
               {copy.result.winRate}:{" "}
@@ -682,18 +723,50 @@ export default function App() {
               </p>
             ) : null}
 
-            <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", gap: "1rem" }}>
+            <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: "1rem" }}>
               {feedbackSubmitted ? (
                 <p className="hint" style={{ margin: 0, color: "var(--primary)" }}>{copy.result.feedbackThanks}</p>
               ) : (
                 <>
-                  <p className="meta" style={{ margin: 0 }}>{copy.result.feedbackPrompt}</p>
-                  <button type="button" className="chip" onClick={() => void submitFeedback("good")} style={{ padding: "0.25rem 0.5rem" }}>
-                    👍 {copy.result.feedbackGood}
-                  </button>
-                  <button type="button" className="chip" onClick={() => void submitFeedback("bad")} style={{ padding: "0.25rem 0.5rem" }}>
-                    👎 {copy.result.feedbackBad}
-                  </button>
+                  <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+                    <p className="meta" style={{ margin: 0 }}>{copy.result.feedbackPrompt}</p>
+                    <button
+                      type="button"
+                      className={`chip ${feedbackRating === "good" ? "active" : ""}`}
+                      onClick={() => setFeedbackRating("good")}
+                      style={{ padding: "0.25rem 0.6rem" }}
+                    >
+                      👍 {copy.result.feedbackGood}
+                    </button>
+                    <button
+                      type="button"
+                      className={`chip ${feedbackRating === "bad" ? "active" : ""}`}
+                      onClick={() => setFeedbackRating("bad")}
+                      style={{ padding: "0.25rem 0.6rem" }}
+                    >
+                      👎 {copy.result.feedbackBad}
+                    </button>
+                  </div>
+                  {feedbackRating && (
+                    <div className="feedback-comment-container">
+                      <textarea
+                        className="feedback-textarea"
+                        placeholder={copy.result.feedbackComment}
+                        value={feedbackComment}
+                        onChange={(e) => setFeedbackComment(e.target.value)}
+                      />
+                      <div className="feedback-submit-row">
+                        <button
+                          type="button"
+                          className="chip"
+                          onClick={() => void submitFeedback(feedbackRating, feedbackComment)}
+                          style={{ padding: "0.4rem 0.8rem", background: "var(--primary)", borderColor: "var(--primary)" }}
+                        >
+                          {copy.result.feedbackSubmit}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -831,6 +904,19 @@ export default function App() {
         </main>
       ) : null}
 
+      <footer style={{ marginTop: "4rem", opacity: 0.5, fontSize: "0.8rem", textAlign: "center" }}>
+        <p>&copy; 2026 Matchup Coach - {systemPatch}</p>
+        <div id="debug-log-container" style={{ display: "none", textAlign: "left", background: "#f0f0f0", padding: "1rem", color: "#333" }}>
+          <h3>Debug Logs</h3>
+          <pre id="frontend-debug-log" style={{ whiteSpace: "pre-wrap" }}>
+            {((window as any)._frontendLogs || []).join("\n")}
+          </pre>
+        </div>
+        <button onClick={() => {
+          const el = document.getElementById("debug-log-container");
+          if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+        }} style={{ opacity: 0.1 }}>DEBUG</button>
+      </footer>
     </div>
   );
 }
