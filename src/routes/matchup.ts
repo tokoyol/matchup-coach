@@ -37,28 +37,31 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMes
   }
 }
 
-function combineBotStats(primary: MatchupStats | null, partner: MatchupStats | null): MatchupStats | null {
-  if (!primary && !partner) return null;
-  if (primary && !partner) return primary;
-  if (!primary && partner) return partner;
-  const left = primary as MatchupStats;
-  const right = partner as MatchupStats;
-  const totalGames = Math.max(1, left.games + right.games);
-  const weighted = (a: number, aGames: number, b: number, bGames: number): number =>
-    Number(((a * aGames + b * bGames) / totalGames).toFixed(3));
-
+/** Aggregate 4 bot dimension lookups (adc vs adc, adc vs support, support vs adc, support vs support) into one duo-vs-duo stats. */
+function aggregateBotDuoStats(
+  patch: string,
+  results: [MatchupStats | null, MatchupStats | null, MatchupStats | null, MatchupStats | null]
+): MatchupStats | null {
+  const [adcVsAdc, adcVsSupport, supportVsAdc, supportVsSupport] = results;
+  const rows = [adcVsAdc, adcVsSupport, supportVsAdc, supportVsSupport].filter(
+    (r): r is MatchupStats => r != null && r.games > 0
+  );
+  if (rows.length === 0) return null;
+  const totalGames = rows.reduce((sum, r) => sum + r.games, 0);
+  if (totalGames <= 0) return null;
+  const winRateSum = rows.reduce((sum, r) => sum + r.winRate * r.games, 0);
+  const winRate = Number((winRateSum / totalGames).toFixed(3));
+  const best = rows.reduce((a, b) => (a.games >= b.games ? a : b));
   return {
-    patch: left.patch,
+    patch,
     games: totalGames,
-    // Simple 50/50 average: primary = playerChampion vs enemyADC, partner = playerChampion vs enemySupport.
-    // These are independent matchup dimensions, not a single population, so equal weighting is more meaningful.
-    winRate: Number(((left.winRate + right.winRate) / 2).toFixed(3)),
-    goldDiff15: Math.round((left.goldDiff15 * left.games + right.goldDiff15 * right.games) / totalGames),
-    pre6KillRate: weighted(left.pre6KillRate, left.games, right.pre6KillRate, right.games),
-    earlyDeathRate: weighted(left.earlyDeathRate, left.games, right.earlyDeathRate, right.games),
-    runeUsage: left.runeUsage.length > 0 ? left.runeUsage : right.runeUsage,
-    firstItemUsage: left.firstItemUsage.length > 0 ? left.firstItemUsage : right.firstItemUsage,
-    computedAt: new Date().toISOString()
+    winRate,
+    goldDiff15: best.goldDiff15,
+    pre6KillRate: best.pre6KillRate,
+    earlyDeathRate: best.earlyDeathRate,
+    runeUsage: best.runeUsage,
+    firstItemUsage: best.firstItemUsage,
+    computedAt: best.computedAt
   };
 }
 
@@ -378,17 +381,29 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         }
         | null = null;
       let usedExternalProvider: string | null = null;
+      const playerRole = parseInput.data.playerRole ?? "adc";
+      const playerAdc =
+        lane === "bot"
+          ? (playerRole === "adc" ? parseInput.data.playerChampion : parseInput.data.playerChampionPartner!)
+          : "";
+      const playerSupport =
+        lane === "bot"
+          ? (playerRole === "adc" ? parseInput.data.playerChampionPartner! : parseInput.data.playerChampion)
+          : "";
+      const enemyAdc = lane === "bot" ? parseInput.data.enemyChampion : "";
+      const enemySupport = lane === "bot" ? (parseInput.data.enemyChampionPartner ?? "") : "";
       const botlaneContexts =
-        lane === "bot" && parseInput.data.playerChampionPartner && parseInput.data.enemyChampionPartner && parseInput.data.playerRole
+        lane === "bot" && playerAdc && playerSupport && enemyAdc && parseInput.data.playerRole
           ? {
             playerRole: parseInput.data.playerRole,
-            allyAdc: parseInput.data.playerChampion,
-            allySupport: parseInput.data.playerChampionPartner,
-            enemyAdc: parseInput.data.enemyChampion,
-            enemySupport: parseInput.data.enemyChampionPartner
+            allyAdc: playerAdc,
+            allySupport: playerSupport,
+            enemyAdc,
+            enemySupport
           }
           : undefined;
       let factsWarning = "";
+      let dbWarning = "";
       let championFacts:
         | {
           playerFacts: Awaited<ReturnType<ChampionFactsService["getChampionFacts"]>>;
@@ -415,49 +430,52 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           factsWarning = error instanceof Error ? error.message : "Champion facts lookup failed.";
         }
       }
-      // For botlane: look up playerChampion (in their role) vs each enemy separately.
-      // primaryStats = playerChampion vs enemy ADC; partnerStats = playerChampion vs enemy support.
-      const playerLane = lane === "bot" ? (parseInput.data.playerRole ?? "adc") : lane;
+      // Bot: 4 lookups (adc vs adc, adc vs support, support vs adc, support vs support) aggregated to duo vs duo. Non-bot: single lookup.
       if (statsRepository) {
-        if (lane === "bot") {
-          const [vsAdcLookup, vsSupportLookup] = await Promise.all([
-            getStatsWithMirroredFallback(
+        try {
+          if (lane === "bot" && playerAdc && playerSupport && enemyAdc) {
+            const [adcVsAdc, adcVsSupport, supportVsAdc, supportVsSupport] = await Promise.all([
+              getStatsWithMirroredFallback(statsRepository, requestedPatch, "adc", playerAdc, enemyAdc),
+              getStatsWithMirroredFallback(statsRepository, requestedPatch, "adc", playerAdc, enemySupport),
+              getStatsWithMirroredFallback(statsRepository, requestedPatch, "support", playerSupport, enemyAdc),
+              getStatsWithMirroredFallback(statsRepository, requestedPatch, "support", playerSupport, enemySupport)
+            ]);
+            usedMirroredFallback =
+              adcVsAdc.mirrored || adcVsSupport.mirrored || supportVsAdc.mirrored || supportVsSupport.mirrored;
+            primaryStats = aggregateBotDuoStats(requestedPatch, [
+              adcVsAdc.stats,
+              adcVsSupport.stats,
+              supportVsAdc.stats,
+              supportVsSupport.stats
+            ]);
+            primaryStatsGames = primaryStats?.games ?? 0;
+            partnerStats = null;
+            partnerStatsGames = 0;
+          } else if (lane !== "bot") {
+            const laneLookup = await getStatsWithMirroredFallback(
               statsRepository,
               requestedPatch,
-              playerLane,
+              lane,
               parseInput.data.playerChampion,
               parseInput.data.enemyChampion
-            ),
-            getStatsWithMirroredFallback(
-              statsRepository,
-              requestedPatch,
-              playerLane,
-              parseInput.data.playerChampion,
-              parseInput.data.enemyChampionPartner ?? ""
-            )
-          ]);
-          primaryStats = vsAdcLookup.stats;
-          partnerStats = vsSupportLookup.stats;
-          primaryStatsGames = vsAdcLookup.stats?.games ?? 0;
-          partnerStatsGames = vsSupportLookup.stats?.games ?? 0;
-          usedMirroredFallback = vsAdcLookup.mirrored || vsSupportLookup.mirrored;
-        } else {
-          const laneLookup = await getStatsWithMirroredFallback(
-            statsRepository,
-            requestedPatch,
-            lane,
-            parseInput.data.playerChampion,
-            parseInput.data.enemyChampion
-          );
-          primaryStats = laneLookup.stats;
-          primaryStatsGames = laneLookup.stats?.games ?? 0;
-          usedMirroredFallback = laneLookup.mirrored;
+            );
+            primaryStats = laneLookup.stats;
+            primaryStatsGames = laneLookup.stats?.games ?? 0;
+            usedMirroredFallback = laneLookup.mirrored;
+          }
+        } catch (dbError) {
+          console.error("[matchup] Database stats lookup failed:", dbError);
+          dbWarning = "Database lookup failed; showing coaching without cached stats.";
         }
       }
       let checkedPatchForStats = requestedPatch;
       for (let i = 0; i < 4; i++) {
         if (!statsRepository) break;
-        if (primaryStatsGames + partnerStatsGames >= requiredSampleGames) break;
+        const enoughGames =
+          lane === "bot"
+            ? primaryStatsGames >= requiredSampleGames
+            : primaryStatsGames + partnerStatsGames >= requiredSampleGames;
+        if (enoughGames) break;
 
         // On i=0, we already did the lookup above, so skip to i=1 if i=0 is insufficient.
         if (i > 0) {
@@ -465,34 +483,29 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           if (!prev) break;
           checkedPatchForStats = prev;
 
-          if (lane === "bot") {
-            const [vsAdcLookup, vsSupportLookup] = await Promise.all([
-              getStatsWithMirroredFallback(
-                statsRepository,
-                checkedPatchForStats,
-                playerLane,
-                parseInput.data.playerChampion,
-                parseInput.data.enemyChampion
-              ),
-              getStatsWithMirroredFallback(
-                statsRepository,
-                checkedPatchForStats,
-                playerLane,
-                parseInput.data.playerChampion,
-                parseInput.data.enemyChampionPartner ?? ""
-              )
+          if (lane === "bot" && playerAdc && playerSupport && enemyAdc) {
+            const [adcVsAdc, adcVsSupport, supportVsAdc, supportVsSupport] = await Promise.all([
+              getStatsWithMirroredFallback(statsRepository, checkedPatchForStats, "adc", playerAdc, enemyAdc),
+              getStatsWithMirroredFallback(statsRepository, checkedPatchForStats, "adc", playerAdc, enemySupport),
+              getStatsWithMirroredFallback(statsRepository, checkedPatchForStats, "support", playerSupport, enemyAdc),
+              getStatsWithMirroredFallback(statsRepository, checkedPatchForStats, "support", playerSupport, enemySupport)
             ]);
-            const combinedGames = (vsAdcLookup.stats?.games ?? 0) + (vsSupportLookup.stats?.games ?? 0);
-            if (combinedGames > primaryStatsGames + partnerStatsGames) {
-              primaryStats = vsAdcLookup.stats;
-              partnerStats = vsSupportLookup.stats;
-              primaryStatsGames = vsAdcLookup.stats?.games ?? 0;
-              partnerStatsGames = vsSupportLookup.stats?.games ?? 0;
+            const aggregated = aggregateBotDuoStats(checkedPatchForStats, [
+              adcVsAdc.stats,
+              adcVsSupport.stats,
+              supportVsAdc.stats,
+              supportVsSupport.stats
+            ]);
+            const aggGames = aggregated?.games ?? 0;
+            if (aggGames > primaryStatsGames) {
+              primaryStats = aggregated;
+              primaryStatsGames = aggGames;
               resolvedPatch = checkedPatchForStats;
               usedPreviousPatchFallback = true;
-              usedMirroredFallback = vsAdcLookup.mirrored || vsSupportLookup.mirrored;
+              usedMirroredFallback =
+                adcVsAdc.mirrored || adcVsSupport.mirrored || supportVsAdc.mirrored || supportVsSupport.mirrored;
             }
-          } else {
+          } else if (lane !== "bot") {
             const laneLookup = await getStatsWithMirroredFallback(
               statsRepository,
               checkedPatchForStats,
@@ -513,53 +526,74 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const riotSampleSize = 0;
       if (externalStatsProvider) {
         try {
-          if (lane === "bot") {
-            const [externalVsAdc, externalVsSupport] = await Promise.all([
+          if (lane === "bot" && playerAdc && playerSupport && enemyAdc) {
+            const [extAdcVsAdc, extAdcVsSupport, extSupportVsAdc, extSupportVsSupport] = await Promise.all([
               withTimeout(
                 externalStatsProvider.getMatchupStats({
-                  lane: playerLane,
+                  lane: "adc",
                   patch: requestedPatch,
-                  playerChampion: parseInput.data.playerChampion,
-                  enemyChampion: parseInput.data.enemyChampion
+                  playerChampion: playerAdc,
+                  enemyChampion: enemyAdc
                 }),
                 4_000,
                 "External matchup source timed out."
               ),
               withTimeout(
                 externalStatsProvider.getMatchupStats({
-                  lane: playerLane,
+                  lane: "adc",
                   patch: requestedPatch,
-                  playerChampion: parseInput.data.playerChampion,
-                  enemyChampion: parseInput.data.enemyChampionPartner ?? ""
+                  playerChampion: playerAdc,
+                  enemyChampion: enemySupport
+                }),
+                4_000,
+                "External matchup source timed out."
+              ),
+              withTimeout(
+                externalStatsProvider.getMatchupStats({
+                  lane: "support",
+                  patch: requestedPatch,
+                  playerChampion: playerSupport,
+                  enemyChampion: enemyAdc
+                }),
+                4_000,
+                "External matchup source timed out."
+              ),
+              withTimeout(
+                externalStatsProvider.getMatchupStats({
+                  lane: "support",
+                  patch: requestedPatch,
+                  playerChampion: playerSupport,
+                  enemyChampion: enemySupport
                 }),
                 4_000,
                 "External matchup source timed out."
               )
             ]);
-            const vsAdcResult = externalVsAdc.result;
-            const vsSupportResult = externalVsSupport.result;
-            if (vsAdcResult?.stats && primaryStatsGames < vsAdcResult.stats.games) {
-              externalPrimaryStats = vsAdcResult.stats;
-              primaryStats = vsAdcResult.stats;
-              primaryStatsGames = vsAdcResult.stats.games;
-              usedExternalProvider = vsAdcResult.provider;
-            }
-            if (vsSupportResult?.stats && partnerStatsGames < vsSupportResult.stats.games) {
-              externalPartnerStats = vsSupportResult.stats;
-              partnerStats = vsSupportResult.stats;
-              partnerStatsGames = vsSupportResult.stats.games;
-              usedExternalProvider = vsSupportResult.provider;
+            const extStats = [
+              extAdcVsAdc.result?.stats ?? null,
+              extAdcVsSupport.result?.stats ?? null,
+              extSupportVsAdc.result?.stats ?? null,
+              extSupportVsSupport.result?.stats ?? null
+            ] as [MatchupStats | null, MatchupStats | null, MatchupStats | null, MatchupStats | null];
+            const extAggregated = aggregateBotDuoStats(requestedPatch, extStats);
+            const extGames = extAggregated?.games ?? 0;
+            if (extAggregated && extGames > primaryStatsGames) {
+              externalPrimaryStats = extAggregated;
+              primaryStats = extAggregated;
+              primaryStatsGames = extGames;
+              usedExternalProvider = extAdcVsAdc.provider;
             }
             const preferredOutcome =
-              [externalVsAdc, externalVsSupport].find((o) => o.status !== "success" && o.status !== "cache_hit") ??
-              externalVsAdc;
+              [extAdcVsAdc, extAdcVsSupport, extSupportVsAdc, extSupportVsSupport].find(
+                (o) => o.status !== "success" && o.status !== "cache_hit"
+              ) ?? extAdcVsAdc;
             externalSourceMeta = {
               provider: preferredOutcome.provider,
               status: preferredOutcome.status,
               failureReason: preferredOutcome.failureReason,
               httpStatus: preferredOutcome.httpStatus
             };
-          } else {
+          } else if (lane !== "bot") {
             const externalStats = await withTimeout(
               externalStatsProvider.getMatchupStats({
                 lane,
@@ -593,10 +627,14 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         }
       }
 
-      const currentSampleSize = (primaryStats?.games ?? 0) + (partnerStats?.games ?? 0);
-      const externalSampleSize = (externalPrimaryStats?.games ?? 0) + (externalPartnerStats?.games ?? 0);
+      const currentSampleSize =
+        lane === "bot" ? (primaryStats?.games ?? 0) : (primaryStats?.games ?? 0) + (partnerStats?.games ?? 0);
+      const externalSampleSize =
+        lane === "bot"
+          ? (externalPrimaryStats?.games ?? 0)
+          : (externalPrimaryStats?.games ?? 0) + (externalPartnerStats?.games ?? 0);
       const hasEnoughSample = currentSampleSize >= requiredSampleGames;
-      const statsForCoaching = lane === "bot" ? combineBotStats(primaryStats, partnerStats) : primaryStats;
+      const statsForCoaching = lane === "bot" ? primaryStats : primaryStats;
       const partnerStatsForCoaching = lane === "bot" ? null : partnerStats;
 
       const coaching = await generateMatchupCoaching(
@@ -670,6 +708,16 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           ...coaching.meta.warnings
         ];
       }
+      if (dbWarning) {
+        coaching.meta.warnings = [
+          clampWarning(
+            language === "ja"
+              ? "データベースの参照に失敗しました。キャッシュなしでコーチングを表示します。"
+              : dbWarning
+          ),
+          ...coaching.meta.warnings
+        ];
+      }
       if (!hasEnoughSample) {
         coaching.meta.warnings = [
           clampWarning(
@@ -681,6 +729,9 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         ];
       }
       coaching.meta.warnings = coaching.meta.warnings.map(clampWarning);
+      if (lane === "bot" && coaching.meta.winRate == null && primaryStats) {
+        coaching.meta.winRate = Number(primaryStats.winRate.toFixed(3));
+      }
       const parseOutput = coachMatchupResponseSchema.safeParse(coaching);
 
       if (!parseOutput.success) {

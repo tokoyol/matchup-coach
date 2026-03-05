@@ -1,0 +1,165 @@
+name: Deep Botlane Lookup
+
+on:
+  workflow_dispatch:
+    inputs:
+      patch:
+        description: "Patch to scrape (e.g. 26.4)"
+        required: false
+        default: ""
+
+env:
+  LOLALYTICS_PATCH: ${{ github.event.inputs.patch || vars.LOLALYTICS_PATCH || '26.4' }}
+  # Deep run: more champions and pairs for full duo-vs-duo coverage (adc + support).
+  LOLALYTICS_BOTLANE_MAX_CHAMPIONS: ${{ vars.LOLALYTICS_BOTLANE_MAX_CHAMPIONS || '0' }}
+  LOLALYTICS_BOTLANE_MAX_PAIRS: ${{ vars.LOLALYTICS_BOTLANE_MAX_PAIRS || '0' }}
+  LOLALYTICS_REQUEST_DELAY_MS: ${{ vars.LOLALYTICS_REQUEST_DELAY_MS || '120' }}
+
+jobs:
+  scrape-adc-deep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Validate required secrets
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "DATABASE_URL secret is required."
+            exit 1
+          fi
+      - name: Scrape ADC (deep)
+        env:
+          DB_PROVIDER: postgres
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
+        run: |
+          EXTRA_ARGS=""
+          if [ -n "$LOLALYTICS_BOTLANE_MAX_CHAMPIONS" ] && [ "$LOLALYTICS_BOTLANE_MAX_CHAMPIONS" != "0" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --maxChampions $LOLALYTICS_BOTLANE_MAX_CHAMPIONS"
+          fi
+          if [ -n "$LOLALYTICS_BOTLANE_MAX_PAIRS" ] && [ "$LOLALYTICS_BOTLANE_MAX_PAIRS" != "0" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --maxPairs $LOLALYTICS_BOTLANE_MAX_PAIRS"
+          fi
+          npm run scrape:lolalytics -- \
+            --patch "$LOLALYTICS_PATCH" \
+            --lane adc \
+            --allChampions \
+            $EXTRA_ARGS \
+            --requestDelayMs "$LOLALYTICS_REQUEST_DELAY_MS"
+      - name: Discord notification (adc deep)
+        if: always()
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ROLE_STATUS: ${{ job.status }}
+          PATCH: ${{ env.LOLALYTICS_PATCH }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [ -z "$ALERT_WEBHOOK_URL" ]; then
+            echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
+            exit 0
+          fi
+          if [ "$ROLE_STATUS" = "success" ]; then
+            ICON="✅"
+          else
+            ICON="❌"
+          fi
+          RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
+          MSG="$ICON Deep botlane lookup ADC $ROLE_STATUS (patch $PATCH). Run: $RUN_URL"
+          curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\":\"$MSG\"}" || true
+
+  scrape-support-deep:
+    needs: scrape-adc-deep
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - name: Scrape support (deep)
+        env:
+          DB_PROVIDER: postgres
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
+          LOLALYTICS_BOTLANE_MAX_CHAMPIONS: ${{ env.LOLALYTICS_BOTLANE_MAX_CHAMPIONS }}
+          LOLALYTICS_BOTLANE_MAX_PAIRS: ${{ env.LOLALYTICS_BOTLANE_MAX_PAIRS }}
+        run: |
+          EXTRA_ARGS=""
+          if [ -n "$LOLALYTICS_BOTLANE_MAX_CHAMPIONS" ] && [ "$LOLALYTICS_BOTLANE_MAX_CHAMPIONS" != "0" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --maxChampions $LOLALYTICS_BOTLANE_MAX_CHAMPIONS"
+          fi
+          if [ -n "$LOLALYTICS_BOTLANE_MAX_PAIRS" ] && [ "$LOLALYTICS_BOTLANE_MAX_PAIRS" != "0" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --maxPairs $LOLALYTICS_BOTLANE_MAX_PAIRS"
+          fi
+          npm run scrape:lolalytics -- \
+            --patch "$LOLALYTICS_PATCH" \
+            --lane support \
+            --allChampions \
+            $EXTRA_ARGS \
+            --requestDelayMs "$LOLALYTICS_REQUEST_DELAY_MS"
+      - name: Discord notification (support deep)
+        if: always()
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ROLE_STATUS: ${{ job.status }}
+          PATCH: ${{ env.LOLALYTICS_PATCH }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [ -z "$ALERT_WEBHOOK_URL" ]; then
+            echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
+            exit 0
+          fi
+          if [ "$ROLE_STATUS" = "success" ]; then
+            ICON="✅"
+          else
+            ICON="❌"
+          fi
+          RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
+          MSG="$ICON Deep botlane lookup Support $ROLE_STATUS (patch $PATCH). Run: $RUN_URL"
+          curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\":\"$MSG\"}" || true
+
+  notify-discord:
+    needs: [scrape-adc-deep, scrape-support-deep]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Discord notification
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ADC_RESULT: ${{ needs.scrape-adc-deep.result }}
+          SUPPORT_RESULT: ${{ needs.scrape-support-deep.result }}
+          PATCH: ${{ env.LOLALYTICS_PATCH }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [ -z "$ALERT_WEBHOOK_URL" ]; then
+            echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
+            exit 0
+          fi
+          if [ "$ADC_RESULT" = "success" ] && [ "$SUPPORT_RESULT" = "success" ]; then
+            ICON="✅"
+            STATUS="success"
+          else
+            ICON="❌"
+            STATUS="failure"
+          fi
+          RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
+          MSG="$ICON Deep botlane lookup $STATUS for patch $PATCH. adc=$ADC_RESULT, support=$SUPPORT_RESULT. Run: $RUN_URL"
+          curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\":\"$MSG\"}" || true
