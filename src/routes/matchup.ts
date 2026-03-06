@@ -108,6 +108,48 @@ async function getStatsWithMirroredFallback(
   return { stats: invertMatchupPerspective(reversed), mirrored: true };
 }
 
+/** Run 4 bot lookups; never throws - returns settled results and sets dbWarning if any lookup failed. */
+async function getBotDuoStatsSettled(
+  statsRepository: MatchupStatsStore,
+  patch: string,
+  playerAdc: string,
+  playerSupport: string,
+  enemyAdc: string,
+  enemySupport: string,
+  dbWarningRef: { current: string | null }
+): Promise<{
+  primaryStats: MatchupStats | null;
+  primaryStatsGames: number;
+  usedMirroredFallback: boolean;
+}> {
+  const settled = await Promise.allSettled([
+    getStatsWithMirroredFallback(statsRepository, patch, "adc", playerAdc, enemyAdc),
+    getStatsWithMirroredFallback(statsRepository, patch, "adc", playerAdc, enemySupport),
+    getStatsWithMirroredFallback(statsRepository, patch, "support", playerSupport, enemyAdc),
+    getStatsWithMirroredFallback(statsRepository, patch, "support", playerSupport, enemySupport)
+  ]);
+  const failed = settled.some((s) => s.status === "rejected");
+  if (failed) {
+    const firstRejection = settled.find((s): s is PromiseRejectedResult => s.status === "rejected");
+    if (firstRejection?.reason) {
+      console.error("[matchup] Bot lane DB lookup failed:", firstRejection.reason);
+    }
+    dbWarningRef.current = "Database lookup failed; showing coaching without cached stats.";
+  }
+  const results = settled.map((s) => (s.status === "fulfilled" ? s.value : { stats: null as MatchupStats | null, mirrored: false }));
+  const primaryStats = aggregateBotDuoStats(patch, [
+    results[0].stats,
+    results[1].stats,
+    results[2].stats,
+    results[3].stats
+  ]);
+  return {
+    primaryStats,
+    primaryStatsGames: primaryStats?.games ?? 0,
+    usedMirroredFallback: results.some((r) => r.mirrored)
+  };
+}
+
 const CHAMPION_LOCALIZATION_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
 
 let cachedJaChampionLocalization: {
@@ -362,8 +404,7 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       const language = parseInput.data.language === "ja" ? "ja" : "en";
       const lane = normalizeCoachLane(parseInput.data.lane);
       const requestedPatch = parseInput.data.patch ?? currentPatch;
-      const previousPatch = getPreviousPatch(requestedPatch);
-      let resolvedPatch = requestedPatch;
+      let resolvedPatch = currentPatch;
       let usedPreviousPatchFallback = false;
       let usedMirroredFallback = false;
       let primaryStats: MatchupStats | null = null;
@@ -382,14 +423,9 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         | null = null;
       let usedExternalProvider: string | null = null;
       const playerRole = parseInput.data.playerRole ?? "adc";
-      const playerAdc =
-        lane === "bot"
-          ? (playerRole === "adc" ? parseInput.data.playerChampion : parseInput.data.playerChampionPartner!)
-          : "";
-      const playerSupport =
-        lane === "bot"
-          ? (playerRole === "adc" ? parseInput.data.playerChampionPartner! : parseInput.data.playerChampion)
-          : "";
+      // Form always sends first column = our ADC, second = our Support. Use them for DB lookups regardless of role.
+      const playerAdc = lane === "bot" ? (parseInput.data.playerChampion ?? "") : "";
+      const playerSupport = lane === "bot" ? (parseInput.data.playerChampionPartner ?? "") : "";
       const enemyAdc = lane === "bot" ? parseInput.data.enemyChampion : "";
       const enemySupport = lane === "bot" ? (parseInput.data.enemyChampionPartner ?? "") : "";
       const botlaneContexts =
@@ -430,31 +466,32 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           factsWarning = error instanceof Error ? error.message : "Champion facts lookup failed.";
         }
       }
-      // Bot: 4 lookups (adc vs adc, adc vs support, support vs adc, support vs support) aggregated to duo vs duo. Non-bot: single lookup.
+      // First try CURRENT_PATCH from env; if limited samples, try previous patch (currentPatch - 1).
       if (statsRepository) {
         try {
           if (lane === "bot" && playerAdc && playerSupport && enemyAdc) {
-            const [adcVsAdc, adcVsSupport, supportVsAdc, supportVsSupport] = await Promise.all([
-              getStatsWithMirroredFallback(statsRepository, requestedPatch, "adc", playerAdc, enemyAdc),
-              getStatsWithMirroredFallback(statsRepository, requestedPatch, "adc", playerAdc, enemySupport),
-              getStatsWithMirroredFallback(statsRepository, requestedPatch, "support", playerSupport, enemyAdc),
-              getStatsWithMirroredFallback(statsRepository, requestedPatch, "support", playerSupport, enemySupport)
-            ]);
-            usedMirroredFallback =
-              adcVsAdc.mirrored || adcVsSupport.mirrored || supportVsAdc.mirrored || supportVsSupport.mirrored;
-            primaryStats = aggregateBotDuoStats(requestedPatch, [
-              adcVsAdc.stats,
-              adcVsSupport.stats,
-              supportVsAdc.stats,
-              supportVsSupport.stats
-            ]);
-            primaryStatsGames = primaryStats?.games ?? 0;
+            const dbWarningRef = { current: dbWarning };
+            const botResult = await getBotDuoStatsSettled(
+              statsRepository,
+              currentPatch,
+              playerAdc,
+              playerSupport,
+              enemyAdc,
+              enemySupport,
+              dbWarningRef
+            );
+            dbWarning = dbWarningRef.current ?? dbWarning;
+            if (botResult.primaryStats) {
+              primaryStats = botResult.primaryStats;
+              primaryStatsGames = botResult.primaryStatsGames;
+              usedMirroredFallback = botResult.usedMirroredFallback;
+            }
             partnerStats = null;
             partnerStatsGames = 0;
           } else if (lane !== "bot") {
             const laneLookup = await getStatsWithMirroredFallback(
               statsRepository,
-              requestedPatch,
+              currentPatch,
               lane,
               parseInput.data.playerChampion,
               parseInput.data.enemyChampion
@@ -468,58 +505,49 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
           dbWarning = "Database lookup failed; showing coaching without cached stats.";
         }
       }
-      let checkedPatchForStats = requestedPatch;
-      for (let i = 0; i < 4; i++) {
-        if (!statsRepository) break;
-        const enoughGames =
-          lane === "bot"
-            ? primaryStatsGames >= requiredSampleGames
-            : primaryStatsGames + partnerStatsGames >= requiredSampleGames;
-        if (enoughGames) break;
-
-        // On i=0, we already did the lookup above, so skip to i=1 if i=0 is insufficient.
-        if (i > 0) {
-          const prev = getPreviousPatch(checkedPatchForStats);
-          if (!prev) break;
-          checkedPatchForStats = prev;
-
-          if (lane === "bot" && playerAdc && playerSupport && enemyAdc) {
-            const [adcVsAdc, adcVsSupport, supportVsAdc, supportVsSupport] = await Promise.all([
-              getStatsWithMirroredFallback(statsRepository, checkedPatchForStats, "adc", playerAdc, enemyAdc),
-              getStatsWithMirroredFallback(statsRepository, checkedPatchForStats, "adc", playerAdc, enemySupport),
-              getStatsWithMirroredFallback(statsRepository, checkedPatchForStats, "support", playerSupport, enemyAdc),
-              getStatsWithMirroredFallback(statsRepository, checkedPatchForStats, "support", playerSupport, enemySupport)
-            ]);
-            const aggregated = aggregateBotDuoStats(checkedPatchForStats, [
-              adcVsAdc.stats,
-              adcVsSupport.stats,
-              supportVsAdc.stats,
-              supportVsSupport.stats
-            ]);
-            const aggGames = aggregated?.games ?? 0;
-            if (aggGames > primaryStatsGames) {
-              primaryStats = aggregated;
-              primaryStatsGames = aggGames;
-              resolvedPatch = checkedPatchForStats;
-              usedPreviousPatchFallback = true;
-              usedMirroredFallback =
-                adcVsAdc.mirrored || adcVsSupport.mirrored || supportVsAdc.mirrored || supportVsSupport.mirrored;
-            }
-          } else if (lane !== "bot") {
-            const laneLookup = await getStatsWithMirroredFallback(
-              statsRepository,
-              checkedPatchForStats,
-              lane,
-              parseInput.data.playerChampion,
-              parseInput.data.enemyChampion
-            );
-            if ((laneLookup.stats?.games ?? 0) > primaryStatsGames) {
-              primaryStats = laneLookup.stats;
-              primaryStatsGames = laneLookup.stats?.games ?? 0;
-              resolvedPatch = checkedPatchForStats;
-              usedPreviousPatchFallback = true;
-              usedMirroredFallback = laneLookup.mirrored;
-            }
+      const previousPatchFromEnv = getPreviousPatch(currentPatch);
+      if (
+        previousPatchFromEnv &&
+        statsRepository &&
+        (lane === "bot"
+          ? primaryStatsGames < requiredSampleGames
+          : primaryStatsGames + partnerStatsGames < requiredSampleGames)
+      ) {
+        if (lane === "bot" && playerAdc && playerSupport && enemyAdc) {
+          const dbWarningRefLoop = { current: dbWarning };
+          const botResult = await getBotDuoStatsSettled(
+            statsRepository,
+            previousPatchFromEnv,
+            playerAdc,
+            playerSupport,
+            enemyAdc,
+            enemySupport,
+            dbWarningRefLoop
+          );
+          dbWarning = dbWarningRefLoop.current ?? dbWarning;
+          const aggregated = botResult.primaryStats;
+          const aggGames = aggregated?.games ?? 0;
+          if (aggGames > primaryStatsGames) {
+            primaryStats = aggregated;
+            primaryStatsGames = aggGames;
+            resolvedPatch = previousPatchFromEnv;
+            usedPreviousPatchFallback = true;
+            usedMirroredFallback = botResult.usedMirroredFallback;
+          }
+        } else if (lane !== "bot") {
+          const laneLookup = await getStatsWithMirroredFallback(
+            statsRepository,
+            previousPatchFromEnv,
+            lane,
+            parseInput.data.playerChampion,
+            parseInput.data.enemyChampion
+          );
+          if ((laneLookup.stats?.games ?? 0) > primaryStatsGames) {
+            primaryStats = laneLookup.stats;
+            primaryStatsGames = laneLookup.stats?.games ?? 0;
+            resolvedPatch = previousPatchFromEnv;
+            usedPreviousPatchFallback = true;
+            usedMirroredFallback = laneLookup.mirrored;
           }
         }
       }
@@ -682,8 +710,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         coaching.meta.warnings = [
           clampWarning(
             language === "ja"
-              ? `現在パッチ(${requestedPatch})のサンプルが不足しているため、前パッチ(${resolvedPatch})のデータを使用しています。`
-              : `Current patch (${requestedPatch}) has limited samples; using previous patch (${resolvedPatch}) data.`
+              ? `現在パッチ(${currentPatch})のサンプルが不足しているため、前パッチ(${resolvedPatch})のデータを使用しています。`
+              : `Current patch (${currentPatch}) has limited samples; using previous patch (${resolvedPatch}) data.`
           ),
           ...coaching.meta.warnings
         ];

@@ -174,14 +174,138 @@ function sanitizeMechanicsLine(line: string): string {
     "play around point-and-click"
   );
 
+  // Sona Q, W, E are targeted; only R (Crescendo) is a skillshot. Do not advise "dodge" for her basic abilities.
+  next = next.replace(
+    /dodge\s+(?:Sona'?s?|Sona)\s*(?:Q[,.]?\s*W[,.]?\s*E|Q\s*and\s*W|abilities?|basic\s*abilities?|poke)?/gi,
+    "play around Sona's targeted Q/W/E (only her R is dodgeable)"
+  );
+  next = next.replace(
+    /dodge\s+Sona'?s?\s*(?:Q|W|E)\b/gi,
+    "play around Sona's targeted Q/W/E (only her R is dodgeable)"
+  );
+
   // Common false instruction in lane advice.
   next = next.replace(
     /dodge\s+(?:her|his|their)?\s*condemn/gi,
     "respect Condemn range and avoid wall angles"
   );
 
+  // Sona Q is targeted; minions don't block it. Fix "behind minions" vs Sona Q.
+  next = next.replace(
+    /stay\s+behind\s+minions\s+to\s+minimize\s+Sona'?s?\s*Q\s*harass/gi,
+    "play around Sona's targeted Q (minions don't block it); respect her range and cooldowns"
+  );
+  next = next.replace(
+    /behind\s+minions\s+to\s+(?:minimize|reduce|block)\s+Sona'?s?\s*(?:Q\s*)?harass/gi,
+    "play around Sona's targeted Q (minions don't block it)"
+  );
+
   next = next.replace(/\s{2,}/g, " ").trim();
   return next;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Fix "coordinate with Nami" / "Nami's follow-up" when the player IS Nami (replace with ally reference). */
+function fixSelfReferenceInLine(
+  line: string,
+  playerChampionName: string | undefined,
+  allyLabel: string
+): string {
+  if (!line || !playerChampionName || playerChampionName.length < 2) return line;
+  const escaped = escapeRegex(playerChampionName);
+  let next = line;
+  next = next.replace(
+    new RegExp(`coordinate\\s+with\\s+(?:the\\s+)?${escaped}\\b`, "gi"),
+    `coordinate with ${allyLabel}`
+  );
+  next = next.replace(
+    new RegExp(`without\\s+(?:the\\s+)?${escaped}'s\\s+follow[- ]?up`, "gi"),
+    `without ${allyLabel}'s follow-up`
+  );
+  next = next.replace(
+    new RegExp(`without\\s+${escaped}'s\\s+follow[- ]?up`, "gi"),
+    `without ${allyLabel}'s follow-up`
+  );
+  next = next.replace(
+    new RegExp(`(?:without|lack of)\\s+${escaped}'s\\s+follow[- ]?up`, "gi"),
+    `without ${allyLabel}'s follow-up`
+  );
+  return next.replace(/\s{2,}/g, " ").trim();
+}
+
+/** Append (Q)/(W)/(E)/(R) to champion ability names when missing. Uses ChampionFacts spell names. */
+function ensureAbilityKeyInText(
+  line: string,
+  facts: ChampionFacts | null | undefined,
+  language: CoachLanguage
+): string {
+  if (!line || !facts?.spellFacts?.length) return line;
+  let next = line;
+  const spellsByLength = [...facts.spellFacts].sort(
+    (a, b) => (b.displayNameEn.length - a.displayNameEn.length) || (b.displayNameJa.length - a.displayNameJa.length)
+  );
+  for (const spell of spellsByLength) {
+    const nameEn = spell.displayNameEn.trim();
+    const nameJa = spell.displayNameJa.trim();
+    const slot = spell.slot;
+    for (const name of [nameEn, nameJa]) {
+      if (!name || name.length < 2) continue;
+      const escaped = escapeRegex(name);
+      const re = new RegExp(`\\b(${escaped})\\b(?!\\s*\\([QWER]\\))`, "gi");
+      next = next.replace(re, `$1 (${slot})`);
+    }
+  }
+  return next.replace(/\s{2,}/g, " ").trim();
+}
+
+/** If commonTrap references the ally's ability names (support role), replace with a support-only fallback. */
+function sanitizeCommonTrapForSupport(
+  trap: string,
+  partnerFacts: ChampionFacts | null | undefined,
+  language: CoachLanguage,
+  section: "vsEnemyAdc" | "vsEnemySupport",
+  enemyChampion?: string
+): string {
+  if (!trap) return trap;
+  const normalizedTrap = trap.toLowerCase();
+  const allySpellNames: string[] = [];
+  if (partnerFacts?.spellFacts?.length) {
+    allySpellNames.push(
+      ...partnerFacts.spellFacts.map((s) => s.displayNameEn.trim().toLowerCase()).filter((n) => n.length >= 3)
+    );
+  }
+  if (allySpellNames.length === 0) {
+    allySpellNames.push(
+      "relentless pursuit",
+      "ardent blaze",
+      "piercing light",
+      "the culling",
+      "tumble",
+      "condemn",
+      "final hour",
+      "peacemaker",
+      "piltover peacemaker",
+      "90 caliber net",
+      "ace in the hole",
+      "infinite duress"
+    );
+  }
+  const hasAllySpellName = allySpellNames.some((name) => {
+    const re = new RegExp(`\\b${escapeRegex(name)}\\b`);
+    return re.test(normalizedTrap);
+  });
+  if (!hasAllySpellName) return trap;
+  const isJa = language === "ja";
+  if (section === "vsEnemyAdc") {
+    return isJa ? "味方ADCが追従できない距離で先にエンゲージしてしまう。" : "Engaging while your ADC is still out of range to follow.";
+  }
+  const enemy = enemyChampion ?? (isJa ? "敵ADC" : "enemy ADC");
+  return isJa
+    ? `悪いタイミングでロームして、味方ADCを${enemy}相手に晒す。`
+    : `Roaming on a bad timer and leaving your ADC exposed into ${enemy}.`;
 }
 
 function normalizeContentKey(value: string): string {
@@ -413,12 +537,13 @@ function enforceChampionFactConsistency(
 
   let interventionCount = 0;
   const scrub = (line: string): string => {
-    const manaGuarded = applyFactGuardToLine(line, nonManaFacts, language);
+    const mechanicsSanitized = sanitizeMechanicsLine(line);
+    const manaGuarded = applyFactGuardToLine(mechanicsSanitized, nonManaFacts, language);
     if (manaGuarded.changed) {
       interventionCount += 1;
       return manaGuarded.value;
     }
-    const spellGuarded = applySpellRoleFactGuardToLine(line, allFacts, language);
+    const spellGuarded = applySpellRoleFactGuardToLine(manaGuarded.value, allFacts, language);
     if (spellGuarded.changed) interventionCount += 1;
     return spellGuarded.value;
   };
@@ -715,6 +840,94 @@ export async function generateMatchupCoaching(
   const factGuard = enforceChampionFactConsistency(advice, botlaneAdvice, options?.championFacts, language);
   advice = factGuard.advice;
   botlaneAdvice = factGuard.botlaneAdvice;
+
+  if (lane === "bot" && input.playerRole) {
+    const playerChampionName =
+      input.playerRole === "support" ? (input.playerChampionPartner ?? "") : input.playerChampion;
+    const allyLabel = input.playerRole === "support" ? "your ADC" : "your support";
+    const fix = (line: string) => fixSelfReferenceInLine(line, playerChampionName, allyLabel);
+    advice = {
+      ...advice,
+      earlyGamePlan: fix(advice.earlyGamePlan),
+      level1to3Rules: advice.level1to3Rules.map(fix),
+      allInWindows: advice.allInWindows.map((w) => ({ ...w, signal: fix(w.signal), action: fix(w.action) })),
+      commonMistakes: advice.commonMistakes.map(fix) as [string, string, string]
+    };
+    if (botlaneAdvice) {
+      botlaneAdvice = {
+        ...botlaneAdvice,
+        vsEnemyAdc: {
+          ...botlaneAdvice.vsEnemyAdc,
+          threatPattern: fix(botlaneAdvice.vsEnemyAdc.threatPattern),
+          spacingRule: fix(botlaneAdvice.vsEnemyAdc.spacingRule),
+          punishWindow: fix(botlaneAdvice.vsEnemyAdc.punishWindow),
+          commonTrap: fix(botlaneAdvice.vsEnemyAdc.commonTrap)
+        },
+        vsEnemySupport: {
+          ...botlaneAdvice.vsEnemySupport,
+          threatPattern: fix(botlaneAdvice.vsEnemySupport.threatPattern),
+          spacingRule: fix(botlaneAdvice.vsEnemySupport.spacingRule),
+          punishWindow: fix(botlaneAdvice.vsEnemySupport.punishWindow),
+          commonTrap: fix(botlaneAdvice.vsEnemySupport.commonTrap)
+        }
+      };
+    }
+    const playerFacts = options?.championFacts?.playerFacts;
+    const ensureKeys = (text: string) => ensureAbilityKeyInText(text, playerFacts, language);
+    advice = {
+      ...advice,
+      earlyGamePlan: ensureKeys(advice.earlyGamePlan),
+      level1to3Rules: advice.level1to3Rules.map(ensureKeys),
+      commonMistakes: advice.commonMistakes.map(ensureKeys) as [string, string, string]
+    };
+    if (botlaneAdvice) {
+      botlaneAdvice = {
+        ...botlaneAdvice,
+        vsEnemyAdc: {
+          ...botlaneAdvice.vsEnemyAdc,
+          threatPattern: ensureKeys(botlaneAdvice.vsEnemyAdc.threatPattern),
+          spacingRule: ensureKeys(botlaneAdvice.vsEnemyAdc.spacingRule),
+          punishWindow: ensureKeys(botlaneAdvice.vsEnemyAdc.punishWindow),
+          commonTrap: ensureKeys(botlaneAdvice.vsEnemyAdc.commonTrap)
+        },
+        vsEnemySupport: {
+          ...botlaneAdvice.vsEnemySupport,
+          threatPattern: ensureKeys(botlaneAdvice.vsEnemySupport.threatPattern),
+          spacingRule: ensureKeys(botlaneAdvice.vsEnemySupport.spacingRule),
+          punishWindow: ensureKeys(botlaneAdvice.vsEnemySupport.punishWindow),
+          commonTrap: ensureKeys(botlaneAdvice.vsEnemySupport.commonTrap)
+        }
+      };
+    }
+    if (
+      input.playerRole === "support" &&
+      botlaneAdvice
+    ) {
+      const partnerFacts = options?.championFacts?.playerPartnerFacts;
+      const sanitizeTrap = (trap: string, section: "vsEnemyAdc" | "vsEnemySupport") =>
+        sanitizeCommonTrapForSupport(trap, partnerFacts, language, section, input.enemyChampion);
+      botlaneAdvice = {
+        ...botlaneAdvice,
+        vsEnemyAdc: {
+          ...botlaneAdvice.vsEnemyAdc,
+          commonTrap: sanitizeTrap(botlaneAdvice.vsEnemyAdc.commonTrap, "vsEnemyAdc")
+        },
+        vsEnemySupport: {
+          ...botlaneAdvice.vsEnemySupport,
+          commonTrap: sanitizeTrap(botlaneAdvice.vsEnemySupport.commonTrap, "vsEnemySupport")
+        }
+      };
+    }
+  } else if (options?.championFacts?.playerFacts) {
+    const playerFacts = options.championFacts.playerFacts;
+    const ensureKeys = (text: string) => ensureAbilityKeyInText(text, playerFacts, language);
+    advice = {
+      ...advice,
+      earlyGamePlan: ensureKeys(advice.earlyGamePlan),
+      level1to3Rules: advice.level1to3Rules.map(ensureKeys),
+      commonMistakes: advice.commonMistakes.map(ensureKeys) as [string, string, string]
+    };
+  }
 
   const response: CoachMatchupResponseOutput = {
     matchup: {

@@ -593,6 +593,9 @@ Constraints:
 - level1to3Rules: 3-5 bullet strings
 - allInWindows: 2-5 objects with timing in [level_2, level_3, level_6, first_item, enemy_misstep]
 - commonMistakes: exactly 3 strings
+- commonMistakes must describe mistakes that the PLAYER (playerChampion) can make, NOT the ally. When playerRole is support, do NOT list mistakes about the ADC (e.g. "Using Lucian's E", "not coordinating with Nami"); list only mistakes the support player might make (e.g. wasting E on wrong target, missing bubble before all-in, roaming when ADC is vulnerable).
+- When mentioning any ability by name, always include the key in parentheses immediately after: e.g. Aqua Prison (Q), Ebb and Flow (W), Relentless Pursuit (E), Crescendo (R). Apply to player, enemy, and ally abilities when referenced.
+- earlyGamePlan and level1to3Rules must only give mechanics advice for playerChampion; when playerRole is support do not instruct the player to "proc" or use the ADC's abilities (e.g. Relentless Pursuit, Ardent Blaze).
 - keep tone concise and action-oriented
 - if there is no meaningful rune change, return empty strings in runeAdjustments fields
 - champion facts are authoritative; do not contradict them
@@ -600,6 +603,9 @@ Constraints:
 - do not call a spell a disengage tool unless that spell is explicitly tagged with role "disengage"
 - ALL ability-specific advice must be from the perspective of playerChampion; playerChampionPartner is context only
 - Do NOT give spell-specific mechanics advice for playerChampionPartner; focus on how playerChampion should play
+- When saying "coordinate with X" or "X's follow-up", X must be the ALLY (playerChampionPartner), never the player. Example: if the player is Nami, say "coordinate with your ADC" or "Lucian's follow-up", never "coordinate with Nami" or "Nami's follow-up".
+- Do NOT advise "dodge" for targeted/point-and-click abilities. Example: Sona Q, W, E are targeted; only her R (Crescendo) is a skillshot. Use "play around" or "respect cooldowns" instead of "dodge" for targeted abilities.
+- When difficulty is easy or favored, emphasize the player side's strengths and proactive windows; do not overemphasize enemy powerspikes as if the enemy has the advantage.
 ${outputLanguageInstruction}
 
 Matchup:
@@ -688,6 +694,7 @@ You are a League of Legends botlane coach for Iron-Gold.
 Perspective: playerRole=${input.playerRole}.
 Allied duo: ${input.playerChampion} + ${input.playerChampionPartner}
 Enemy duo: ${input.enemyChampion} + ${input.enemyChampionPartner}
+difficulty=${input.difficulty}
 
 Return ONLY valid JSON with keys:
 vsEnemyAdc, vsEnemySupport
@@ -698,6 +705,9 @@ Each key is an object with exactly:
 - punishWindow
 - commonTrap
 
+commonTrap must describe a trap that the PLAYER (playerChampion) can fall into, NOT the ally. When playerRole is support, do NOT describe traps about the ADC (e.g. "Lucian using E aggressively" or "Wasting Ardent Blaze"); describe only traps the support might fall into, using only the support's ability names (e.g. Nami: Aqua Prison (Q), Ebb and Flow (W), Tidecaller's Blessing (E), Tidal Wave (R)). Never mention the ally ADC's abilities in commonTrap. Never say "without Nami's follow-up" when the player is Nami—say "without your ADC's follow-up" (or the ADC champion name). "Follow-up" and "coordinate with" always refer to the ally (playerChampionPartner), never to the player.
+- When mentioning abilities, always include the key in parentheses after the name, e.g. Aqua Prison (Q), Ebb and Flow (W), Crescendo (R).
+- Sona Q is targeted (point-and-click); staying behind minions does NOT block or reduce Sona Q. Do not advise "stay behind minions" to avoid Sona's Q harass.
 Write role-specific advice from the player's perspective.
 ALL advice must be about how playerChampion (${input.playerChampion}, role: ${input.playerRole}) should play.
 Do NOT give spell-specific mechanics for the ally partner; they are context only.
@@ -705,6 +715,8 @@ Keep each value practical and concise (1 sentence each).
 Champion facts are authoritative; do not contradict them.
 Never discuss mana management for champions with resourceType other than mana.
 Do not call a spell a disengage tool unless that spell is explicitly tagged with role "disengage".
+- When difficulty is easy or favored, emphasize the player side's strengths and proactive windows; do not overemphasize enemy powerspikes (e.g. Twitch level 3) as if the enemy has the advantage. If the player's duo wins early (e.g. Lucian Nami), advice should reflect pressing that advantage, not playing around the enemy's spikes.
+- Do NOT advise "dodge" for targeted/point-and-click abilities. Sona Q, W, E are targeted; only her R is a skillshot. Use "play around" or "respect cooldowns" instead.
 ${championFactsBlock}
 ${outputLanguageInstruction}
 `.trim();
