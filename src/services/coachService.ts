@@ -60,7 +60,7 @@ function fallbackRuneAdjustments(
   };
 }
 
-function estimateDifficulty(
+export function estimateDifficulty(
   playerChampion: string,
   enemyChampion: string,
   stats?: MatchupStats | null

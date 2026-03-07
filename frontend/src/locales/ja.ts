@@ -27,6 +27,12 @@ const ja = {
     submitIdle: "相性コーチングを受ける",
     submitLoading: "生成中..."
   },
+  bestMatchups: {
+    title: "{enemy} に強いマッチアップ Top 3",
+    empty: "このチャンピオン・レーンではマッチアップデータがありません。",
+    winRate: "勝率",
+    games: "試合数"
+  },
   feedback: {
     chooseDifferent: "異なる2体のチャンピオンを選んでください。",
     botlaneDifferent: "ボットレーンでは両デュオを選び、ADCとサポートが同じにならないようにしてください。",

@@ -8,7 +8,7 @@ import {
   normalizeLane
 } from "../data/champions.js";
 import { coachMatchupRequestSchema, coachMatchupResponseSchema } from "../schemas/matchup.js";
-import { generateMatchupCoaching } from "../services/coachService.js";
+import { generateMatchupCoaching, estimateDifficulty } from "../services/coachService.js";
 import { ChampionFactsService } from "../services/championFactsService.js";
 import type { ExternalMatchupStatsProvider } from "../services/externalMatchupStatsProvider.js";
 import { GeminiCoachService } from "../services/geminiCoachService.js";
@@ -23,6 +23,13 @@ const feedbackRequestSchema = z.object({
   enemyChampion: z.string().min(1),
   rating: z.enum(["good", "bad"]),
   comment: z.string().optional()
+});
+
+const bestMatchupsQuerySchema = z.object({
+  patch: z.string().regex(/^[0-9]{2}\.[0-9]{1,2}$/).optional(),
+  lane: z.enum(["top", "jungle", "mid", "adc", "support"]),
+  enemyChampion: z.string().min(2).max(40),
+  limit: z.coerce.number().int().min(1).max(10).optional()
 });
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
@@ -233,6 +240,59 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
     res.json({
       patch: currentPatch
     });
+  });
+
+  router.get("/best-matchups", async (req, res) => {
+    const parseResult = bestMatchupsQuerySchema.safeParse(req.query);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        error: "Invalid query parameters.",
+        details: parseResult.error.flatten()
+      });
+    }
+    const { lane, enemyChampion, limit } = parseResult.data;
+    const patch = parseResult.data.patch ?? currentPatch;
+    const normalizedEnemy = normalizeChampionName(enemyChampion);
+    const normalizedLane = normalizeLane(lane) as "top" | "jungle" | "mid" | "adc" | "support";
+
+    if (!statsRepository) {
+      return res.json({
+        patch,
+        lane: normalizedLane,
+        enemyChampion: normalizedEnemy,
+        matchups: []
+      });
+    }
+
+    try {
+      const rows = await statsRepository.getBestMatchupsForChampion(
+        patch,
+        normalizedLane,
+        normalizedEnemy,
+        limit ?? 3
+      );
+      const matchups = rows.map(({ playerChampion, stats }) => ({
+        playerChampion,
+        winRate: stats.winRate,
+        games: stats.games,
+        difficulty: estimateDifficulty(playerChampion, normalizedEnemy, stats)
+      }));
+      return res.json({
+        patch,
+        lane: normalizedLane,
+        enemyChampion: normalizedEnemy,
+        matchups
+      });
+    } catch (err) {
+      console.error("[matchup] getBestMatchups failed:", err);
+      return res.status(500).json({
+        error: "Failed to load best matchups.",
+        patch,
+        lane: normalizedLane,
+        enemyChampion: normalizedEnemy,
+        matchups: []
+      });
+    }
   });
 
   router.get("/champion-localization", async (req, res) => {
@@ -656,11 +716,11 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
       }
 
       const currentSampleSize =
-        lane === "bot" ? (primaryStats?.games ?? 0) : (primaryStats?.games ?? 0) + (partnerStats?.games ?? 0);
+        lane === "bot" ? (primaryStats?.games ?? 0) : (primaryStats?.games ?? 0) + ((partnerStats as MatchupStats | null)?.games ?? 0);
       const externalSampleSize =
         lane === "bot"
           ? (externalPrimaryStats?.games ?? 0)
-          : (externalPrimaryStats?.games ?? 0) + (externalPartnerStats?.games ?? 0);
+          : (externalPrimaryStats?.games ?? 0) + ((externalPartnerStats as MatchupStats | null)?.games ?? 0);
       const hasEnoughSample = currentSampleSize >= requiredSampleGames;
       const statsForCoaching = lane === "bot" ? primaryStats : primaryStats;
       const partnerStatsForCoaching = lane === "bot" ? null : partnerStats;

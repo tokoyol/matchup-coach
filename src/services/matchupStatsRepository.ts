@@ -194,4 +194,34 @@ export class MatchupStatsRepository implements MatchupStatsStore {
 
     return rows.map((row) => row.champion).sort((a, b) => a.localeCompare(b));
   }
+
+  async getBestMatchupsForChampion(
+    patch: string,
+    lane: SupportedLane,
+    enemyChampion: string,
+    limit = 3
+  ): Promise<Array<{ playerChampion: string; stats: MatchupStats }>> {
+    const cappedLimit = Math.max(1, Math.floor(limit));
+    const rows = (await this.db.all(
+      `
+        SELECT player_champion AS player_champion, stats_json AS stats_json
+        FROM matchup_stats_cache
+        WHERE patch = ? AND lane = ? AND enemy_champion = ?
+          AND json_extract(stats_json,'$.games') >= 500
+        ORDER BY json_extract(stats_json,'$.winRate') DESC, json_extract(stats_json,'$.games') DESC
+        LIMIT ?
+      `,
+      [patch, lane, enemyChampion, cappedLimit]
+    )) as Array<{ player_champion: string; stats_json: string }>;
+
+    const out: Array<{ playerChampion: string; stats: MatchupStats }> = [];
+    for (const row of rows) {
+      try {
+        out.push({ playerChampion: row.player_champion, stats: JSON.parse(row.stats_json) as MatchupStats });
+      } catch {
+        // skip malformed row
+      }
+    }
+    return out;
+  }
 }

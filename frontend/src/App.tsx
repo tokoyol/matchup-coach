@@ -38,6 +38,18 @@ interface DDragonChampionListPayload {
   >;
 }
 
+interface BestMatchupsResponse {
+  patch: string;
+  lane: DataLane;
+  enemyChampion: string;
+  matchups: Array<{
+    playerChampion: string;
+    winRate: number;
+    games: number;
+    difficulty: Difficulty;
+  }>;
+}
+
 function championNameKey(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
 }
@@ -249,6 +261,8 @@ export default function App() {
   const [jaChampionNames, setJaChampionNames] = useState<Record<string, string>>({});
   const [championIdByKey, setChampionIdByKey] = useState<Record<string, string>>({});
   const [iconPatch, setIconPatch] = useState<string>("");
+  const [bestMatchups, setBestMatchups] = useState<BestMatchupsResponse | null>(null);
+  const [bestMatchupsLoading, setBestMatchupsLoading] = useState<boolean>(false);
   const copy = COPY[language];
 
   const [currentHash, setCurrentHash] = useState(window.location.hash);
@@ -412,6 +426,46 @@ export default function App() {
       setEnemyChampion(enemyOptions[0]);
     }
   }, [enemyOptions, enemyChampion]);
+
+  const bestMatchupsLane = selectedLane === "bot" ? playerRole : selectedLane;
+  const bestMatchupsPatch = /^\d{2}\.\d{1,2}$/.test(dataPatch) ? dataPatch : systemPatch;
+  const canFetchBestMatchups = Boolean(
+    enemyChampion.trim().length >= 2 &&
+    (selectedLane !== "bot" || playerRole)
+  );
+  useEffect(() => {
+    if (!canFetchBestMatchups) {
+      setBestMatchups(null);
+      return;
+    }
+    if (!/^\d{2}\.\d{1,2}$/.test(bestMatchupsPatch)) {
+      setBestMatchups(null);
+      return;
+    }
+    let cancelled = false;
+    setBestMatchupsLoading(true);
+    const url = `${API_BASE}/api/best-matchups?patch=${encodeURIComponent(bestMatchupsPatch)}&lane=${encodeURIComponent(bestMatchupsLane)}&enemyChampion=${encodeURIComponent(enemyChampion)}&limit=3`;
+    fetch(url)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((data: BestMatchupsResponse) => {
+        if (!cancelled) {
+          setBestMatchups(data);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBestMatchups(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setBestMatchupsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canFetchBestMatchups, bestMatchupsPatch, bestMatchupsLane, enemyChampion]);
 
   useEffect(() => {
     if (selectedLane !== "bot") return;
@@ -649,6 +703,31 @@ export default function App() {
             </section>
           </div>
         )}
+
+        <section className="best-matchups" aria-label={copy.bestMatchups.title} style={{ marginTop: "1rem" }}>
+          <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem" }}>
+            {copy.bestMatchups.title.replace("{enemy}", championLabel(enemyChampion))}
+          </h3>
+          {!canFetchBestMatchups ? null : bestMatchupsLoading ? (
+            <p className="hint" style={{ margin: 0 }}>{copy.form.submitLoading}</p>
+          ) : bestMatchups?.matchups?.length ? (
+            <ul style={{ margin: 0, paddingLeft: "1.25rem", display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+              {bestMatchups.matchups.map((m, i) => (
+                <li key={`${m.playerChampion}-${i}`}>
+                  <strong>{championLabel(m.playerChampion)}</strong>
+                  {" — "}
+                  {copy.bestMatchups.winRate}: {(m.winRate * 100).toFixed(1)}%
+                  {" · "}
+                  {copy.bestMatchups.games}: {m.games}
+                  {" · "}
+                  <span className={`difficulty ${m.difficulty}`}>{difficultyLabel(m.difficulty, language)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="hint" style={{ margin: 0 }}>{copy.bestMatchups.empty}</p>
+          )}
+        </section>
 
         <button type="submit" disabled={!canSubmit}>
           {loading ? copy.form.submitLoading : copy.form.submitIdle}

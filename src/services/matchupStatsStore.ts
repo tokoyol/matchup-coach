@@ -51,4 +51,10 @@ export interface MatchupStatsStore {
     }>
   >;
   listChampionsByLane(patch: string, lane: SupportedLane, limit?: number): Promise<string[]>;
+  getBestMatchupsForChampion(
+    patch: string,
+    lane: SupportedLane,
+    enemyChampion: string,
+    limit?: number
+  ): Promise<Array<{ playerChampion: string; stats: MatchupStats }>>;
 }

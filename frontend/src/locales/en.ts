@@ -27,6 +27,12 @@ const en = {
     submitIdle: "Get Matchup Coaching",
     submitLoading: "Generating..."
   },
+  bestMatchups: {
+    title: "Top 3 best matchups against {enemy}",
+    empty: "No matchup data for this champion and lane.",
+    winRate: "Win rate",
+    games: "Games"
+  },
   feedback: {
     chooseDifferent: "Choose two different champions.",
     botlaneDifferent: "For bot lane, choose both duo champions and keep ADC/support picks different.",

@@ -200,4 +200,29 @@ export class PostgresMatchupStatsRepository implements MatchupStatsStore {
 
     return result.rows.map((row) => row.champion).sort((a, b) => a.localeCompare(b));
   }
+
+  async getBestMatchupsForChampion(
+    patch: string,
+    lane: SupportedLane,
+    enemyChampion: string,
+    limit = 3
+  ): Promise<Array<{ playerChampion: string; stats: MatchupStats }>> {
+    const cappedLimit = Math.max(1, Math.floor(limit));
+    const result = await this.pool.query<{ player_champion: string; stats_json: MatchupStats }>(
+      `
+        SELECT player_champion, stats_json
+        FROM matchup_stats_cache
+        WHERE patch = $1 AND lane = $2 AND enemy_champion = $3
+          AND (stats_json->>'games')::int >= 500
+        ORDER BY (stats_json->>'winRate')::float DESC NULLS LAST, (stats_json->>'games')::int DESC NULLS LAST
+        LIMIT $4
+      `,
+      [patch, lane, enemyChampion, cappedLimit]
+    );
+
+    return result.rows.map((row) => ({
+      playerChampion: row.player_champion,
+      stats: row.stats_json
+    }));
+  }
 }
