@@ -132,12 +132,30 @@ function scanForBestStatsNode(value: unknown): { games: number; winRate: number;
   return best;
 }
 
+function isRetryableStatus(status: ExternalLookupStatus, httpStatus?: number): boolean {
+  if (status === "timeout" || status === "network_error") return true;
+  if (status === "http_error" && httpStatus !== undefined) {
+    return httpStatus === 429 || httpStatus >= 500;
+  }
+  return false;
+}
+
+function backoffMs(attempt: number, baseMs: number): number {
+  return baseMs * Math.pow(2, attempt);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class LolalyticsScrapeProvider implements ExternalMatchupStatsProvider {
   private readonly cache = new Map<string, { result: ExternalMatchupLookupResult; expiresAt: number }>();
 
   constructor(
     private readonly timeoutMs: number = 3500,
-    private readonly cacheTtlMs: number = 30 * 60 * 1000
+    private readonly cacheTtlMs: number = 30 * 60 * 1000,
+    private readonly maxRetries: number = 3,
+    private readonly retryBackoffBaseMs: number = 1000
   ) {}
 
   async getMatchupStats(input: ExternalMatchupLookupInput): Promise<ExternalMatchupLookupOutcome> {
@@ -168,52 +186,87 @@ export class LolalyticsScrapeProvider implements ExternalMatchupStatsProvider {
       patch ? `&patch=${encodeURIComponent(patch)}` : ""
     }`;
     const urlWithoutPatch = `https://lolalytics.com/lol/${player}/vs/${enemy}/build/?lane=${lane}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      let response = await fetch(urlWithPatch, {
-        headers: {
-          "user-agent": "matchup-coach/0.1 (+stats-fetch)"
-        },
-        signal: controller.signal
-      });
-      if (!response.ok && patch) {
-        response = await fetch(urlWithoutPatch, {
-          headers: {
-            "user-agent": "matchup-coach/0.1 (+stats-fetch)"
-          },
+
+    let lastOutcome: ExternalMatchupLookupOutcome | null = null;
+
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      if (attempt > 0) {
+        await sleep(backoffMs(attempt - 1, this.retryBackoffBaseMs));
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+      try {
+        let response = await fetch(urlWithPatch, {
+          headers: { "user-agent": "matchup-coach/0.1 (+stats-fetch)" },
           signal: controller.signal
         });
-      }
-      if (!response.ok) {
-        return {
-          provider: "lolalytics",
-          status: "http_error",
-          result: null,
-          httpStatus: response.status,
-          failureReason: `HTTP ${response.status} from external provider.`
-        };
-      }
-      const html = await response.text();
+        if (!response.ok && patch) {
+          response = await fetch(urlWithoutPatch, {
+            headers: { "user-agent": "matchup-coach/0.1 (+stats-fetch)" },
+            signal: controller.signal
+          });
+        }
+        if (!response.ok) {
+          lastOutcome = {
+            provider: "lolalytics",
+            status: "http_error",
+            result: null,
+            httpStatus: response.status,
+            failureReason: `HTTP ${response.status} from external provider.`
+          };
+          if (isRetryableStatus("http_error", response.status) && attempt < this.maxRetries) continue;
+          return lastOutcome;
+        }
 
-      const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/i);
-      if (!nextDataMatch?.[1]) {
-        const parsedHtml = parseFromRenderedHtml(html);
-        if (!parsedHtml) {
+        const html = await response.text();
+        const nextDataMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/i);
+        if (!nextDataMatch?.[1]) {
+          const parsedHtml = parseFromRenderedHtml(html);
+          if (!parsedHtml) {
+            return {
+              provider: "lolalytics",
+              status: "parse_miss",
+              result: null,
+              failureReason: "External page parsed but no matchup stats were found."
+            };
+          }
+          const result = {
+            provider: "lolalytics",
+            stats: {
+              patch: input.patch,
+              games: parsedHtml.games,
+              winRate: parsedHtml.winRate,
+              goldDiff15: parsedHtml.goldDiff15,
+              pre6KillRate: 0,
+              earlyDeathRate: 0,
+              runeUsage: [],
+              firstItemUsage: [],
+              computedAt: new Date().toISOString()
+            }
+          };
+          this.cache.set(cacheKey, { result, expiresAt: Date.now() + this.cacheTtlMs });
+          return { provider: "lolalytics", status: "success", result };
+        }
+
+        const parsed = JSON.parse(nextDataMatch[1]) as unknown;
+        const best = scanForBestStatsNode(parsed);
+        if (!best || best.games <= 0) {
           return {
             provider: "lolalytics",
             status: "parse_miss",
             result: null,
-            failureReason: "External page parsed but no matchup stats were found."
+            failureReason: "External JSON payload had no usable matchup stats."
           };
         }
+
         const result = {
           provider: "lolalytics",
           stats: {
             patch: input.patch,
-            games: parsedHtml.games,
-            winRate: parsedHtml.winRate,
-            goldDiff15: parsedHtml.goldDiff15,
+            games: best.games,
+            winRate: best.winRate,
+            goldDiff15: best.goldDiff15,
             pre6KillRate: 0,
             earlyDeathRate: 0,
             runeUsage: [],
@@ -222,61 +275,29 @@ export class LolalyticsScrapeProvider implements ExternalMatchupStatsProvider {
           }
         };
         this.cache.set(cacheKey, { result, expiresAt: Date.now() + this.cacheTtlMs });
-        return {
-          provider: "lolalytics",
-          status: "success",
-          result
-        };
-      }
-
-      const parsed = JSON.parse(nextDataMatch[1]) as unknown;
-      const best = scanForBestStatsNode(parsed);
-      if (!best || best.games <= 0) {
-        return {
-          provider: "lolalytics",
-          status: "parse_miss",
-          result: null,
-          failureReason: "External JSON payload had no usable matchup stats."
-        };
-      }
-
-      const result = {
-        provider: "lolalytics",
-        stats: {
-          patch: input.patch,
-          games: best.games,
-          winRate: best.winRate,
-          goldDiff15: best.goldDiff15,
-          pre6KillRate: 0,
-          earlyDeathRate: 0,
-          runeUsage: [],
-          firstItemUsage: [],
-          computedAt: new Date().toISOString()
+        return { provider: "lolalytics", status: "success", result };
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          lastOutcome = {
+            provider: "lolalytics",
+            status: "timeout",
+            result: null,
+            failureReason: `External provider timed out after ${this.timeoutMs}ms.`
+          };
+        } else {
+          lastOutcome = {
+            provider: "lolalytics",
+            status: "network_error",
+            result: null,
+            failureReason: error instanceof Error ? error.message : "External provider network request failed."
+          };
         }
-      };
-      this.cache.set(cacheKey, { result, expiresAt: Date.now() + this.cacheTtlMs });
-      return {
-        provider: "lolalytics",
-        status: "success",
-        result
-      };
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        return {
-          provider: "lolalytics",
-          status: "timeout",
-          result: null,
-          failureReason: `External provider timed out after ${this.timeoutMs}ms.`
-        };
+        if (attempt < this.maxRetries) continue;
+      } finally {
+        clearTimeout(timeout);
       }
-      return {
-        provider: "lolalytics",
-        status: "network_error",
-        result: null,
-        failureReason: error instanceof Error ? error.message : "External provider network request failed."
-      };
-    } finally {
-      clearTimeout(timeout);
     }
+
+    return lastOutcome!;
   }
 }

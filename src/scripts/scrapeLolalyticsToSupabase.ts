@@ -140,6 +140,8 @@ async function main(): Promise<void> {
   }
 
   const options = parseArgs();
+  // Abort if this many consecutive pairs all fail (no successes or cache_hits).
+  const CIRCUIT_BREAKER_THRESHOLD = 20;
   const provider = new LolalyticsScrapeProvider(env.EXTERNAL_STATS_TIMEOUT_MS);
   const pool = await getPostgresPool(env.DATABASE_URL);
   const repository = new PostgresMatchupStatsRepository(pool);
@@ -169,24 +171,25 @@ async function main(): Promise<void> {
     let written = 0;
 
     const allPairs = buildPairs(champions);
+    const slicedPairs =
+      options.startIndex > 0 || options.maxPairs > 0
+        ? allPairs.slice(
+            options.startIndex,
+            options.maxPairs > 0 ? options.startIndex + options.maxPairs : undefined
+          )
+        : allPairs;
     const existingKeys = options.skipExisting
       ? await loadExistingPairKeys({ pool, patch: options.patch, lane })
       : new Set<string>();
-    const missingPairs = options.skipExisting
-      ? allPairs.filter((pair) => !existingKeys.has(`${pair.playerChampion}:::${pair.enemyChampion}`))
-      : allPairs;
-    const start = options.startIndex;
-    const selectedPairs =
-      missingPairs.length === 0 || start >= missingPairs.length
-        ? []
-        : options.maxPairs > 0
-          ? missingPairs.slice(start, start + options.maxPairs)
-          : missingPairs.slice(start);
+    const selectedPairs = options.skipExisting
+      ? slicedPairs.filter((pair) => !existingKeys.has(`${pair.playerChampion}:::${pair.enemyChampion}`))
+      : slicedPairs;
 
     console.log(
-      `[lolalytics] start patch=${options.patch} lane=${lane} champions=${champions.length} totalPairs=${allPairs.length} missingPairs=${missingPairs.length} selectedPairs=${selectedPairs.length} startIndex=${start} skipExisting=${options.skipExisting}`
+      `[lolalytics] start patch=${options.patch} lane=${lane} champions=${champions.length} totalPairs=${allPairs.length} slicedPairs=${slicedPairs.length} selectedPairs=${selectedPairs.length} startIndex=${options.startIndex} skipExisting=${options.skipExisting}`
     );
 
+    let consecutiveFailures = 0;
     for (let i = 0; i < selectedPairs.length; i += 1) {
       const pair = selectedPairs[i];
       const outcome = await provider.getMatchupStats({
@@ -197,6 +200,19 @@ async function main(): Promise<void> {
       });
       statusCounts.set(outcome.status, (statusCounts.get(outcome.status) ?? 0) + 1);
       globalStatusCounts.set(outcome.status, (globalStatusCounts.get(outcome.status) ?? 0) + 1);
+
+      if (outcome.status === "success" || outcome.status === "cache_hit") {
+        consecutiveFailures = 0;
+      } else {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+          console.error(
+            `[lolalytics] CIRCUIT BREAKER: ${consecutiveFailures} consecutive failures on lane=${lane}. Last status=${outcome.status} reason=${outcome.failureReason ?? "unknown"}. Aborting.`
+          );
+          console.error(`[lolalytics] statusCounts so far: ${JSON.stringify(Object.fromEntries(statusCounts))}`);
+          process.exit(1);
+        }
+      }
 
       if (outcome.result?.stats) {
         rows.push({
