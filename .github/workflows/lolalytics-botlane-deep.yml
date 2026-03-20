@@ -12,8 +12,8 @@ env:
   LOLALYTICS_PATCH: ${{ github.event.inputs.patch || vars.LOLALYTICS_PATCH || '26.4' }}
   LOLALYTICS_BOTLANE_MAX_CHAMPIONS: ${{ vars.LOLALYTICS_BOTLANE_MAX_CHAMPIONS || '0' }}
   LOLALYTICS_REQUEST_DELAY_MS: ${{ vars.LOLALYTICS_REQUEST_DELAY_MS || '120' }}
-  # Chunk size per job to stay under 2h (pairs per job). ~70 champs = 4830 pairs; 4 chunks of 2000.
-  BOTLANE_CHUNK_PAIRS: "2000"
+  # 172 champs = 29,412 pairs total. 4 chunks of 7500 covers all of them with margin.
+  BOTLANE_CHUNK_PAIRS: "7500"
 
 jobs:
   scrape-adc-deep-1:
@@ -79,7 +79,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
         run: |
-          EXTRA_ARGS="--startIndex 2000 --maxPairs $BOTLANE_CHUNK_PAIRS"
+          EXTRA_ARGS="--startIndex 7500 --maxPairs $BOTLANE_CHUNK_PAIRS"
           npm run scrape:lolalytics -- \
             --patch "$LOLALYTICS_PATCH" \
             --lane adc \
@@ -118,7 +118,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
         run: |
-          EXTRA_ARGS="--startIndex 4000 --maxPairs $BOTLANE_CHUNK_PAIRS"
+          EXTRA_ARGS="--startIndex 15000 --maxPairs $BOTLANE_CHUNK_PAIRS"
           npm run scrape:lolalytics -- \
             --patch "$LOLALYTICS_PATCH" \
             --lane adc \
@@ -157,7 +157,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
         run: |
-          EXTRA_ARGS="--startIndex 6000 --maxPairs $BOTLANE_CHUNK_PAIRS"
+          EXTRA_ARGS="--startIndex 22500 --maxPairs $BOTLANE_CHUNK_PAIRS"
           npm run scrape:lolalytics -- \
             --patch "$LOLALYTICS_PATCH" \
             --lane adc \
@@ -235,7 +235,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
         run: |
-          EXTRA_ARGS="--startIndex 2000 --maxPairs $BOTLANE_CHUNK_PAIRS"
+          EXTRA_ARGS="--startIndex 7500 --maxPairs $BOTLANE_CHUNK_PAIRS"
           npm run scrape:lolalytics -- \
             --patch "$LOLALYTICS_PATCH" \
             --lane support \
@@ -274,7 +274,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
         run: |
-          EXTRA_ARGS="--startIndex 4000 --maxPairs $BOTLANE_CHUNK_PAIRS"
+          EXTRA_ARGS="--startIndex 15000 --maxPairs $BOTLANE_CHUNK_PAIRS"
           npm run scrape:lolalytics -- \
             --patch "$LOLALYTICS_PATCH" \
             --lane support \
@@ -313,7 +313,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CURRENT_PATCH: ${{ env.LOLALYTICS_PATCH }}
         run: |
-          EXTRA_ARGS="--startIndex 6000 --maxPairs $BOTLANE_CHUNK_PAIRS"
+          EXTRA_ARGS="--startIndex 22500 --maxPairs $BOTLANE_CHUNK_PAIRS"
           npm run scrape:lolalytics -- \
             --patch "$LOLALYTICS_PATCH" \
             --lane support \
