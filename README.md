@@ -1,45 +1,37 @@
 🛡️ Matchup Coach
 
-Matchup Coach is a web-based strategic assistant for League of Legends that helps players understand and prepare for champion lane matchups. By selecting your champion and the opponent’s champion, Matchup Coach generates contextual advice on how to approach the lane, giving users insights into favorable playstyles, trade patterns, and matchup dynamics.
-
-Whether you’re climbing ranked, learning a new role, or refining your laning strategy, Matchup Coach provides quick, actionable guidance during champion select and before the game begins.
+Pick your champion and your opponent's. Matchup Coach tells you how to play the lane: trade patterns, playstyle, what to watch for. Fast enough to check during champion select.
 
 🎯 Features
 
-Champion vs Champion Analysis
-Enter any two champions to receive tailored strategic advice on how to handle the matchup.
+**Champion vs Champion Analysis**
+Matchup-specific advice for any two champions.
 
-Pre-Game Decision Support
-Helps players plan their approach based on matchup nuances before they lock in.
+**Pre-Game Decision Support**
+Plan your approach before you lock in.
 
-Clean, Interactive UI
-Simple input interface for quick access during champion select.
+**Clean UI**
+Simple input, quick output.
 
-Web Deployment
-Accessible as a static, lightweight app hosted via Vercel or Netlify.
+**Web Deployment**
+Hosted as a static app on Vercel or Netlify.
 
 🚀 Getting Started
 
-Choose your champion and the opponent’s champion
-
-Submit the matchup
-
-View strategic advice to guide your laning decisions
+1. Pick your champion and the enemy champion
+2. Submit the matchup
+3. Read the advice before you lock in
 
 🛠️ Built With
 
-TypeScript / JavaScript – Frontend logic
-
-React / Web UI – User interface
-
-API integration (optional) – Structured matchup fetching or logic
-
-Vercel / Netlify – Deployment
+- TypeScript / JavaScript
+- React
+- Vercel / Netlify
 
 🤝 Contributing
 
-Contributions, suggestions, and improvements are welcome! Feel free to submit a PR or open an issue if you have ideas for enhancing matchup logic, UI clarity, or data accuracy.
+Submit a PR or open an issue.
 
 📌 License
 
-This project is open source and available under the MIT License.
+MIT

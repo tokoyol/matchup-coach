@@ -1,6 +1,8 @@
 name: Scheduled Lolalytics Refresh
 
 on:
+  schedule:
+    - cron: "0 23 * * 5"  # Every Friday at 5pm CST (UTC-6, so 23:00 UTC)
   workflow_dispatch:
     inputs:
       patch:
