@@ -201,17 +201,19 @@ async function main(): Promise<void> {
       statusCounts.set(outcome.status, (statusCounts.get(outcome.status) ?? 0) + 1);
       globalStatusCounts.set(outcome.status, (globalStatusCounts.get(outcome.status) ?? 0) + 1);
 
-      if (outcome.status === "success" || outcome.status === "cache_hit") {
-        consecutiveFailures = 0;
-      } else {
+      const isServiceFailure =
+        outcome.status === "http_error" || outcome.status === "timeout" || outcome.status === "network_error";
+      if (isServiceFailure) {
         consecutiveFailures += 1;
         if (consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
           console.error(
-            `[lolalytics] CIRCUIT BREAKER: ${consecutiveFailures} consecutive failures on lane=${lane}. Last status=${outcome.status} reason=${outcome.failureReason ?? "unknown"}. Aborting.`
+            `[lolalytics] CIRCUIT BREAKER: ${consecutiveFailures} consecutive service failures on lane=${lane}. Last status=${outcome.status} reason=${outcome.failureReason ?? "unknown"}. Aborting.`
           );
           console.error(`[lolalytics] statusCounts so far: ${JSON.stringify(Object.fromEntries(statusCounts))}`);
           process.exit(1);
         }
+      } else {
+        consecutiveFailures = 0;
       }
 
       if (outcome.result?.stats) {
