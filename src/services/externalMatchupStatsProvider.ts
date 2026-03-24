@@ -208,6 +208,14 @@ export class LolalyticsScrapeProvider implements ExternalMatchupStatsProvider {
           });
         }
         if (!response.ok) {
+          if (response.status === 404) {
+            return {
+              provider: "lolalytics",
+              status: "parse_miss",
+              result: null,
+              failureReason: `HTTP 404: matchup page not found.`
+            };
+          }
           lastOutcome = {
             provider: "lolalytics",
             status: "http_error",
