@@ -11,6 +11,8 @@ import { MatchupStatsRepository } from "./services/matchupStatsRepository.js";
 import { PostgresMatchupStatsRepository } from "./services/postgresMatchupStatsRepository.js";
 import type { MatchupStatsStore } from "./services/matchupStatsStore.js";
 
+const SERVER_STARTED_AT = Date.now();
+
 async function bootstrap(): Promise<void> {
   const app = express();
   app.use(
@@ -68,11 +70,15 @@ async function bootstrap(): Promise<void> {
   }
 
   app.get("/health", (_req, res) => {
+    const uptimeMs = Date.now() - SERVER_STARTED_AT;
     res.json({
       ok: true,
       service: "matchup-coach-backend",
       patch: env.CURRENT_PATCH,
-      liveStatsEnabled: false
+      liveStatsEnabled: false,
+      startedAt: new Date(SERVER_STARTED_AT).toISOString(),
+      uptimeSeconds: Math.floor(uptimeMs / 1000),
+      warming: uptimeMs < 30_000
     });
   });
 
