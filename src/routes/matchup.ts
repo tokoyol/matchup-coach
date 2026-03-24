@@ -269,7 +269,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         patch,
         normalizedLane,
         normalizedEnemy,
-        limit ?? 3
+        limit ?? 3,
+        minSampleGames
       );
       const matchups = rows.map(({ playerChampion, stats }) => ({
         playerChampion,

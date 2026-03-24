@@ -205,7 +205,8 @@ export class PostgresMatchupStatsRepository implements MatchupStatsStore {
     patch: string,
     lane: SupportedLane,
     enemyChampion: string,
-    limit = 3
+    limit = 3,
+    minSampleGames = 50
   ): Promise<Array<{ playerChampion: string; stats: MatchupStats }>> {
     const cappedLimit = Math.max(1, Math.floor(limit));
     const result = await this.pool.query<{ player_champion: string; stats_json: MatchupStats }>(
@@ -213,11 +214,11 @@ export class PostgresMatchupStatsRepository implements MatchupStatsStore {
         SELECT player_champion, stats_json
         FROM matchup_stats_cache
         WHERE patch = $1 AND lane = $2 AND enemy_champion = $3
-          AND (stats_json->>'games')::int >= 500
+          AND (stats_json->>'games')::int >= $5
         ORDER BY (stats_json->>'winRate')::float DESC NULLS LAST, (stats_json->>'games')::int DESC NULLS LAST
         LIMIT $4
       `,
-      [patch, lane, enemyChampion, cappedLimit]
+      [patch, lane, enemyChampion, cappedLimit, minSampleGames]
     );
 
     return result.rows.map((row) => ({

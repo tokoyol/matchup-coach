@@ -55,6 +55,7 @@ export interface MatchupStatsStore {
     patch: string,
     lane: SupportedLane,
     enemyChampion: string,
-    limit?: number
+    limit?: number,
+    minSampleGames?: number
   ): Promise<Array<{ playerChampion: string; stats: MatchupStats }>>;
 }

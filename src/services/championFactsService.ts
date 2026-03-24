@@ -94,6 +94,12 @@ function applySpellRoleOverrides(championId: string, slot: "Q" | "W" | "E" | "R"
   if (championId === "Aatrox" && slot === "W") {
     return ["cc", "zone", "engage"];
   }
+  // Mel W (Rebuttal) is a reflect barrier — DDragon has no reflect keyword so it
+  // classifies as damage/mobility. Mark it as disengage so the fact guard doesn't
+  // replace valid advice about using it defensively.
+  if (championId === "Mel" && slot === "W") {
+    return ["disengage", "sustain"];
+  }
   return roles;
 }
 
