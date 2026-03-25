@@ -7,7 +7,6 @@ on:
 
 permissions:
   actions: write
-  variables: write
 
 jobs:
   update-patch:
@@ -43,7 +42,7 @@ jobs:
       - name: Update GitHub repo variable LOLALYTICS_PATCH
         if: steps.check.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           PATCH="${{ steps.patch.outputs.patch }}"
           # Create if it doesn't exist, otherwise update
