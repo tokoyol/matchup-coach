@@ -78,6 +78,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PATCH="${{ steps.patch.outputs.patch }}"
-          gh workflow run lolalytics-refresh.yml -f patch="$PATCH"
-          gh workflow run lolalytics-botlane-deep.yml -f patch="$PATCH"
+          gh workflow run lolalytics-refresh.yml --repo ${{ github.repository }} -f patch="$PATCH"
+          gh workflow run lolalytics-botlane-deep.yml --repo ${{ github.repository }} -f patch="$PATCH"
           echo "Triggered scrape workflows for patch $PATCH"
