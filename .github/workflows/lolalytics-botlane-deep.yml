@@ -11,7 +11,7 @@ on:
         default: ""
 
 env:
-  LOLALYTICS_PATCH: ${{ github.event.inputs.patch || vars.LOLALYTICS_PATCH || '26.4' }}
+  LOLALYTICS_PATCH: ${{ github.event.inputs.patch || vars.LOLALYTICS_PATCH || '26.6' }}
   LOLALYTICS_BOTLANE_MAX_CHAMPIONS: ${{ vars.LOLALYTICS_BOTLANE_MAX_CHAMPIONS || '0' }}
   LOLALYTICS_REQUEST_DELAY_MS: ${{ vars.LOLALYTICS_REQUEST_DELAY_MS || '120' }}
   # 172 champs = 29,412 pairs total. 4 chunks of 7500 covers all of them with margin.

@@ -1,0 +1,83 @@
+name: Patch Auto-Update
+
+on:
+  schedule:
+    - cron: "0 18 * * 3"  # Wednesdays at noon CST (18:00 UTC) — patch day
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  variables: write
+
+jobs:
+  update-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect latest patch from Data Dragon
+        id: patch
+        run: |
+          DDRAGON=$(curl -fsS https://ddragon.leagueoflegends.com/api/versions.json | jq -r '.[0]')
+          MINOR=$(echo "$DDRAGON" | cut -d'.' -f2)
+          YEAR=$(date +%Y | cut -c3-4)
+          PATCH="${YEAR}.${MINOR}"
+          echo "ddragon=$DDRAGON" >> $GITHUB_OUTPUT
+          echo "patch=$PATCH" >> $GITHUB_OUTPUT
+          echo "Detected patch: $PATCH (DDragon: $DDRAGON)"
+
+      - name: Check if patch changed
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT=$(gh api repos/${{ github.repository }}/actions/variables/LOLALYTICS_PATCH \
+            --jq '.value' 2>/dev/null || echo "")
+          NEW="${{ steps.patch.outputs.patch }}"
+          if [ "$CURRENT" = "$NEW" ]; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Patch unchanged ($NEW), skipping update."
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Patch changed: $CURRENT → $NEW"
+          fi
+
+      - name: Update GitHub repo variable LOLALYTICS_PATCH
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PATCH="${{ steps.patch.outputs.patch }}"
+          # Create if it doesn't exist, otherwise update
+          gh api repos/${{ github.repository }}/actions/variables/LOLALYTICS_PATCH \
+            --method PATCH -f value="$PATCH" 2>/dev/null || \
+          gh api repos/${{ github.repository }}/actions/variables \
+            --method POST -f name="LOLALYTICS_PATCH" -f value="$PATCH"
+
+      - name: Update Render CURRENT_PATCH
+        if: steps.check.outputs.changed == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          PATCH="${{ steps.patch.outputs.patch }}"
+          # Fetch all existing env vars, update CURRENT_PATCH, PUT back
+          EXISTING=$(curl -fsS \
+            "https://api.render.com/v1/services/$RENDER_SERVICE_ID/env-vars" \
+            -H "Authorization: Bearer $RENDER_API_KEY")
+          UPDATED=$(echo "$EXISTING" | jq --arg patch "$PATCH" \
+            'map(if .key == "CURRENT_PATCH" then .value = $patch else . end)')
+          curl -fsS -X PUT \
+            "https://api.render.com/v1/services/$RENDER_SERVICE_ID/env-vars" \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$UPDATED"
+          echo "Render CURRENT_PATCH updated to $PATCH"
+
+      - name: Trigger scrape workflows
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PATCH="${{ steps.patch.outputs.patch }}"
+          gh workflow run lolalytics-refresh.yml -f patch="$PATCH"
+          gh workflow run lolalytics-botlane-deep.yml -f patch="$PATCH"
+          echo "Triggered scrape workflows for patch $PATCH"

@@ -6,7 +6,7 @@ dotenv.config({ override: true });
 const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGIN: z.string().default("*"),
-  CURRENT_PATCH: z.string().regex(/^[0-9]{2}\.[0-9]{1,2}$/).default("26.4"),
+  CURRENT_PATCH: z.string().regex(/^[0-9]{2}\.[0-9]{1,2}$/).default("26.6"),
   EXTERNAL_STATS_PROVIDER: z.enum(["none", "lolalytics"]).default("none"),
   EXTERNAL_STATS_TIMEOUT_MS: z.coerce.number().int().positive().default(3500),
   GEMINI_API_KEY: z.string().min(10).optional(),

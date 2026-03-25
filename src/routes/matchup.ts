@@ -265,13 +265,29 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
     }
 
     try {
-      const rows = await statsRepository.getBestMatchupsForChampion(
+      let rows = await statsRepository.getBestMatchupsForChampion(
         patch,
         normalizedLane,
         normalizedEnemy,
         limit ?? 3,
         minSampleGames
       );
+      let resolvedPatch = patch;
+
+      if (rows.length === 0) {
+        const prevPatch = getPreviousPatch(patch);
+        if (prevPatch) {
+          rows = await statsRepository.getBestMatchupsForChampion(
+            prevPatch,
+            normalizedLane,
+            normalizedEnemy,
+            limit ?? 3,
+            minSampleGames
+          );
+          if (rows.length > 0) resolvedPatch = prevPatch;
+        }
+      }
+
       const matchups = rows.map(({ playerChampion, stats }) => ({
         playerChampion,
         winRate: stats.winRate,
@@ -279,7 +295,8 @@ export function createMatchupRouter(options: CreateMatchupRouterOptions): Router
         difficulty: estimateDifficulty(playerChampion, normalizedEnemy, stats)
       }));
       return res.json({
-        patch,
+        patch: resolvedPatch,
+        requestedPatch: patch,
         lane: normalizedLane,
         enemyChampion: normalizedEnemy,
         matchups
