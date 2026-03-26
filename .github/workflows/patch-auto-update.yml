@@ -5,6 +5,10 @@ on:
     - cron: "0 18 * * 3"  # Wednesdays at noon CST (18:00 UTC) — patch day
   workflow_dispatch:
 
+concurrency:
+  group: patch-auto-update
+  cancel-in-progress: false
+
 permissions:
   actions: write
 
