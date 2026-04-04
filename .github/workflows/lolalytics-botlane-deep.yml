@@ -53,14 +53,12 @@ jobs:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then exit 0; fi
           ICON=$([ "$ROLE_STATUS" = "success" ] && echo "✅" || echo "❌")
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"content\":\"$ICON Deep botlane ADC chunk 1/4 $ROLE_STATUS (patch $PATCH). https://github.com/$REPOSITORY/actions/runs/$RUN_ID\"}" || true
+            -d "{\"content\":\"$ICON Deep botlane ADC chunk 1/4 $ROLE_STATUS (patch $PATCH).\"}" || true
 
   scrape-adc-deep-2:
     needs: scrape-adc-deep-1
@@ -92,14 +90,12 @@ jobs:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then exit 0; fi
           ICON=$([ "$ROLE_STATUS" = "success" ] && echo "✅" || echo "❌")
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"content\":\"$ICON Deep botlane ADC chunk 2/4 $ROLE_STATUS (patch $PATCH). https://github.com/$REPOSITORY/actions/runs/$RUN_ID\"}" || true
+            -d "{\"content\":\"$ICON Deep botlane ADC chunk 2/4 $ROLE_STATUS (patch $PATCH).\"}" || true
 
   scrape-adc-deep-3:
     needs: scrape-adc-deep-2
@@ -131,14 +127,12 @@ jobs:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then exit 0; fi
           ICON=$([ "$ROLE_STATUS" = "success" ] && echo "✅" || echo "❌")
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"content\":\"$ICON Deep botlane ADC chunk 3/4 $ROLE_STATUS (patch $PATCH). https://github.com/$REPOSITORY/actions/runs/$RUN_ID\"}" || true
+            -d "{\"content\":\"$ICON Deep botlane ADC chunk 3/4 $ROLE_STATUS (patch $PATCH).\"}" || true
 
   scrape-adc-deep-4:
     needs: scrape-adc-deep-3
@@ -170,14 +164,12 @@ jobs:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then exit 0; fi
           ICON=$([ "$ROLE_STATUS" = "success" ] && echo "✅" || echo "❌")
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"content\":\"$ICON Deep botlane ADC chunk 4/4 $ROLE_STATUS (patch $PATCH). https://github.com/$REPOSITORY/actions/runs/$RUN_ID\"}" || true
+            -d "{\"content\":\"$ICON Deep botlane ADC chunk 4/4 $ROLE_STATUS (patch $PATCH).\"}" || true
 
   scrape-support-deep-1:
     needs: scrape-adc-deep-4
@@ -209,14 +201,12 @@ jobs:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then exit 0; fi
           ICON=$([ "$ROLE_STATUS" = "success" ] && echo "✅" || echo "❌")
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"content\":\"$ICON Deep botlane Support chunk 1/4 $ROLE_STATUS (patch $PATCH). https://github.com/$REPOSITORY/actions/runs/$RUN_ID\"}" || true
+            -d "{\"content\":\"$ICON Deep botlane Support chunk 1/4 $ROLE_STATUS (patch $PATCH).\"}" || true
 
   scrape-support-deep-2:
     needs: scrape-support-deep-1
@@ -248,14 +238,12 @@ jobs:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then exit 0; fi
           ICON=$([ "$ROLE_STATUS" = "success" ] && echo "✅" || echo "❌")
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"content\":\"$ICON Deep botlane Support chunk 2/4 $ROLE_STATUS (patch $PATCH). https://github.com/$REPOSITORY/actions/runs/$RUN_ID\"}" || true
+            -d "{\"content\":\"$ICON Deep botlane Support chunk 2/4 $ROLE_STATUS (patch $PATCH).\"}" || true
 
   scrape-support-deep-3:
     needs: scrape-support-deep-2
@@ -287,14 +275,12 @@ jobs:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then exit 0; fi
           ICON=$([ "$ROLE_STATUS" = "success" ] && echo "✅" || echo "❌")
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"content\":\"$ICON Deep botlane Support chunk 3/4 $ROLE_STATUS (patch $PATCH). https://github.com/$REPOSITORY/actions/runs/$RUN_ID\"}" || true
+            -d "{\"content\":\"$ICON Deep botlane Support chunk 3/4 $ROLE_STATUS (patch $PATCH).\"}" || true
 
   scrape-support-deep-4:
     needs: scrape-support-deep-3
@@ -326,14 +312,12 @@ jobs:
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then exit 0; fi
           ICON=$([ "$ROLE_STATUS" = "success" ] && echo "✅" || echo "❌")
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"content\":\"$ICON Deep botlane Support chunk 4/4 $ROLE_STATUS (patch $PATCH). https://github.com/$REPOSITORY/actions/runs/$RUN_ID\"}" || true
+            -d "{\"content\":\"$ICON Deep botlane Support chunk 4/4 $ROLE_STATUS (patch $PATCH).\"}" || true
 
   notify-discord:
     needs: [scrape-adc-deep-1, scrape-adc-deep-2, scrape-adc-deep-3, scrape-adc-deep-4, scrape-support-deep-1, scrape-support-deep-2, scrape-support-deep-3, scrape-support-deep-4]

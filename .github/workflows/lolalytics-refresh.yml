@@ -53,8 +53,6 @@ jobs:
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
           ROLE: top
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
@@ -65,8 +63,7 @@ jobs:
           else
             ICON="❌"
           fi
-          RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
-          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH). Run: $RUN_URL"
+          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH)."
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d "{\"content\":\"$MSG\"}" || true
@@ -102,8 +99,6 @@ jobs:
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
           ROLE: jungle
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
@@ -114,8 +109,7 @@ jobs:
           else
             ICON="❌"
           fi
-          RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
-          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH). Run: $RUN_URL"
+          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH)."
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d "{\"content\":\"$MSG\"}" || true
@@ -151,8 +145,6 @@ jobs:
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
           ROLE: mid
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
@@ -163,8 +155,7 @@ jobs:
           else
             ICON="❌"
           fi
-          RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
-          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH). Run: $RUN_URL"
+          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH)."
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d "{\"content\":\"$MSG\"}" || true
@@ -200,8 +191,6 @@ jobs:
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
           ROLE: adc
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
@@ -212,8 +201,7 @@ jobs:
           else
             ICON="❌"
           fi
-          RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
-          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH). Run: $RUN_URL"
+          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH)."
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d "{\"content\":\"$MSG\"}" || true
@@ -249,8 +237,6 @@ jobs:
           ROLE_STATUS: ${{ job.status }}
           PATCH: ${{ env.LOLALYTICS_PATCH }}
           ROLE: support
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
@@ -261,8 +247,7 @@ jobs:
           else
             ICON="❌"
           fi
-          RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
-          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH). Run: $RUN_URL"
+          MSG="$ICON Lolalytics role refresh $ROLE_STATUS for $ROLE (patch $PATCH)."
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d "{\"content\":\"$MSG\"}" || true
@@ -284,8 +269,6 @@ jobs:
           MAX_CHAMPIONS: ${{ env.LOLALYTICS_MAX_CHAMPIONS }}
           MAX_PAIRS: ${{ env.LOLALYTICS_ROLE_MAX_PAIRS }}
           REQUEST_DELAY_MS: ${{ env.LOLALYTICS_REQUEST_DELAY_MS }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           if [ -z "$ALERT_WEBHOOK_URL" ]; then
             echo "ALERT_WEBHOOK_URL not set; skipping Discord notification."
@@ -298,8 +281,7 @@ jobs:
             ICON="❌"
             STATUS="failure"
           fi
-          RUN_URL="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
-          MSG="$ICON Lolalytics refresh $STATUS for patch $PATCH (maxChampions=$MAX_CHAMPIONS, roleMaxPairs=$MAX_PAIRS, delayMs=$REQUEST_DELAY_MS). Lane results: top=$TOP_RESULT, jungle=$JUNGLE_RESULT, mid=$MID_RESULT, adc=$ADC_RESULT, support=$SUPPORT_RESULT. Run: $RUN_URL"
+          MSG="$ICON Lolalytics refresh $STATUS for patch $PATCH (maxChampions=$MAX_CHAMPIONS, roleMaxPairs=$MAX_PAIRS, delayMs=$REQUEST_DELAY_MS). Lane results: top=$TOP_RESULT, jungle=$JUNGLE_RESULT, mid=$MID_RESULT, adc=$ADC_RESULT, support=$SUPPORT_RESULT."
           curl -fsS -X POST "$ALERT_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -d "{\"content\":\"$MSG\"}" || true
